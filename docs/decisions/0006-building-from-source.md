@@ -52,12 +52,47 @@ could behave differently between two nights with nothing in this repository
 having changed. That failure mode is difficult to diagnose at 03:00 and it is
 cheap to prevent.
 
-| Component | Tag | Verified |
-|---|---|---|
-| `indilib/indi` | `v2.2.3` | Yes — `e7dfc40b926a28b2a090308c8075a9970dfcb5b8` |
-| `indilib/indi-3rdparty` | `v2.2.3` | Yes — `d899e76bec71de4171c9fc55d48e42fd0b1b0f0e` |
-| `rlancaste/stellarsolver` | `2.6` | Yes — `157092d6f843fb987818bd61f0b14b440eca3146` |
-| KStars | `v3.7.0` | **No** — invent.kde.org was unreachable from the environment this was written in |
+SPEC section 4 sets a **floor** of INDI 2.2.3, not an exact version, so the pins
+are the current upstream tags at or above it rather than the floor itself.
+
+| Component | Tag | Commit | Verified against |
+|---|---|---|---|
+| `indilib/indi` | `v2.2.4` | `478d34a34e5dde5ef574bb23917618508707663d` | github.com/indilib/indi |
+| `indilib/indi-3rdparty` | `v2.2.4` | `64fbe2e2dcded132e107d764d4965e034b810a3f` | github.com/indilib/indi-3rdparty |
+| `rlancaste/stellarsolver` | `2.8` | `89377481934f40e7a84a8f91f667e37125e47ae0` | github.com/rlancaste/stellarsolver |
+| KStars | **unset** | — | **not resolved; see below** |
+
+`indi` and `indi-3rdparty` are held in **lockstep**: the ZWO drivers link the
+core, and the projects tag together. `v2.2.4.1` and `v2.2.4.2` exist for the
+core only, with no matching 3rdparty tag, so `v2.2.4` is the newest matched
+pair. Raising the core alone would put a driver build against a core it was not
+released with.
+
+### KStars: deliberately unpinned, and the build refuses
+
+`invent.kde.org` is not reachable from the environment this repository was
+developed in (`CONNECT tunnel failed, response 403`). The obvious substitute,
+the KDE mirror at `github.com/KDE/kstars`, **cannot be trusted for this**: its
+`v3.x` tags run `v3.0.0` through `v3.5.10` and then jump to `v3.80.2`,
+`v3.80.3`, `v3.90.1` … `v3.97.0`. There is no `v3.6.x` and no `v3.7.x` at all,
+and both of those series certainly shipped — KStars 3.6.3 is in Debian
+bookworm. Whatever that mirror is, it is not a complete tag list, and reading a
+release tag off it would be a second guess dressed as evidence.
+
+So `KSTARS_VERSION` has **no default**. The KStars stage stops with an
+explanation and the command to resolve it:
+
+```
+git ls-remote --tags https://invent.kde.org/education/kstars.git | grep 3.8
+NOCTURNE_KSTARS_VERSION=<tag> ./scripts/install.sh
+```
+
+The version matters beyond currency: the Optical Trains DBus interface that the
+executor bridge targets arrived in **3.8.2**. Building an older release would
+have Nocturne working around the absence of an interface that exists upstream.
+The current stable release is reported as **3.8.3** (1 June 2026); the tag name
+and commit are to be confirmed from a machine that can reach KDE, and recorded
+here when they are.
 
 Every build appends the component, the tag and the **resolved commit** to
 `${BUILD_DIR}/versions.lock`, which `--check` prints. That file is the record of
@@ -73,12 +108,9 @@ loudly and records the branch name in the lock file.
   interrupted build resumes; and it is a one-off per machine, not per session.
 - Upgrading INDI is an edit to one variable at the top of the installer,
   followed by a rebuild — deliberate, not incidental.
-- **The KStars tag is unverified.** If `v3.7.0` is not a tag on invent.kde.org,
-  the installer stops with the exact reason rather than building a branch. To
-  find the right one:
-  `git ls-remote --tags https://invent.kde.org/education/kstars.git | tail`
-  then set `NOCTURNE_KSTARS_VERSION`. This is the most likely thing to need
-  fixing on the first real install.
+- **KStars will not build until its tag is supplied.** That is deliberate: a
+  wrong release here is not cosmetic. `--skip-kstars` installs INDI and Nocturne
+  now and leaves KStars for later.
 - **The installer has never been run end to end.** No aarch64 Raspberry Pi was
   available, and the environment it was written in could not reach the
   package sources. Its syntax, option handling, pinning guard and `--check`

@@ -15,3 +15,4 @@ listed in SPEC.md section 4.
 | [0004](0004-closed-vocabularies.md) | Closed enumerations where the specification lists examples | Accepted |
 | [0005](0005-executor-transport-settings.md) | Executor transport timings without a fourth YAML file | Accepted |
 | [0006](0006-building-from-source.md) | Building INDI, StellarSolver and KStars from source, at pinned tags | Accepted |
+| [0007](0007-m1-pointing-is-ungated.md) | M1 leaves pointing ungated, and how that is contained | Accepted (limitation) |

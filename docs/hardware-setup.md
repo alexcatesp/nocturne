@@ -1,179 +1,203 @@
-# Hardware setup and the M1 hardware test
+# Wave 150i bench test — the M1 hardware test
 
-SPEC section 14, milestone M1. This is the HITL half of M1: the AUTO half runs
-in CI against the INDI simulators and is already green.
+**What this is:** proving the mount talks to the Pi over a USB cable, with no
+telescope attached and nothing moving. Twenty minutes indoors, on a table.
 
-> **This is the highest-risk item in the project.** Some NINA users report the
-> Wave 150i connecting only through the SynScan serial bridge. If the direct
-> connection fails here, the fallback is the WiFi driver, and that outcome gets
-> recorded as an ADR before any further work (SPEC section 14, M1).
+**Why it matters:** this is the highest-risk unknown in the whole project. Some
+users report the Wave 150i only connecting through the SynScan app acting as a
+bridge. If a direct cable works, everything else follows. If it does not, the
+fallback is WiFi and that changes the design.
 
----
-
-## 1. What to connect
-
-Everything on USB to the Pi 5, everything on its own 12 V supply as usual:
-
-| Device | Connection | Notes |
-|---|---|---|
-| Sky-Watcher Wave 150i | **USB serial, direct to the Pi** | No SynScan app, no phone, no WiFi. This is the point of the test. |
-| ZWO ASI533MM Pro | USB 3 | Its own 12 V for the TEC |
-| ZWO EFW 8×1.25" | USB | |
-| ZWO EAF | USB | |
-| ZWO ASI120MM Mini | USB 2 | |
-
-Mount powered and roughly polar aligned. Counterweight fitted as you normally
-fit it. Do this in daylight, on the terrace, with the tube pointed somewhere
-harmless — you are going to slew.
+> **Nothing in this procedure moves the mount.** No slew, no goto, no park, no
+> tracking. Not one motor turns.
 
 ---
 
-## 2. Install
+## Before you start
 
-```bash
-git clone https://github.com/alexcatesp/nocturne.git
-cd nocturne
-./scripts/install.sh
+**On the table:**
+
+- The Wave 150i mount head. **No telescope. No counterweight. No dovetail.**
+  Nothing bolted to it. If the OTA is on, take it off.
+- Mount powered from its 12 V supply.
+- A USB cable from the mount to the Raspberry Pi.
+- The Pi powered, on the network, and you logged into it.
+
+**Not needed:** tripod, polar alignment, darkness, the camera, the filter wheel,
+the focuser. Those come later.
+
+**Close the SynScan app.** On your phone, on any tablet, anywhere. The whole
+point is to find out whether the cable works *without* it. If SynScan is
+connected to the mount, this test tells you nothing.
+
+---
+
+## Step 1 — Is the cable there?
+
 ```
-
-It builds INDI, the ZWO drivers, StellarSolver and KStars from source. Budget
-one to three hours on a Pi 5, mostly KStars. It is safe to interrupt and re-run.
-
-Then:
-
-```bash
-./scripts/install.sh --check
-```
-
-Everything should report `[ ok ]`. In particular `INDI 2.2.3` or later — the
-release that added Wave 150i home indexer support to `indi_eqmod`.
-
----
-
-## 3. Find the mount's serial port
-
-With the mount powered and plugged in:
-
-```bash
 ls -l /dev/serial/by-id/
-dmesg | tail -20
 ```
 
-You are looking for a CH340, CP210x or FTDI adapter appearing as `/dev/ttyUSB0`
-(occasionally `/dev/ttyACM0`). If nothing appears, the cable or the mount's USB
-port is the problem, not the software.
+**Good:** one line comes back, mentioning something like `CH340`, `CP210x`,
+`FTDI` or `Prolific`, ending in `-port0`.
 
-If the port is not `/dev/ttyUSB0`, put the real one in `config/equipment.yaml`
-under `mount.port`, and prefer the stable path:
+**Bad:** `No such file or directory`, or nothing listed.
+
+If bad: it is the cable, the port or the power — not the software. Try the other
+USB socket on the mount, try a different cable (some are charge-only and carry
+no data), and check the mount is actually powered on. Then run it again.
+
+**Copy that whole line down.** You need it in step 3.
+
+---
+
+## Step 2 — Tell Nocturne where the mount is
+
+Open the equipment file:
+
+```
+nano config/equipment.yaml
+```
+
+Find the `mount:` section near the bottom, and the line `port:`. Change it to
+the path from step 1, in full, in quotes:
 
 ```yaml
 mount:
   port: "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0"
 ```
 
-Then confirm the configuration still loads:
+Save with `Ctrl+O`, `Enter`, then `Ctrl+X`.
 
-```bash
+Check it:
+
+```
 .venv/bin/nocturne check-config
 ```
 
----
+**Good:** `Nocturne configuration OK.` and a summary of your rig.
 
-## 4. The test itself
-
-### 4.1 Start the drivers
-
-```bash
-indiserver -v indi_eqmod_telescope indi_asi_ccd indi_asi_focuser indi_asi_wheel
-```
-
-Leave it running and watch it. In a second terminal:
-
-```bash
-.venv/bin/python - <<'PY'
-import asyncio
-from nocturne.executor import IndiClient, IndiSettings
-
-async def main():
-    async with IndiClient(IndiSettings()) as client:
-        await asyncio.sleep(5)
-        for device in client.devices():
-            print(device)
-            await client.connect_device(device)
-            print("   connected:", client.is_device_connected(device))
-
-asyncio.run(main())
-PY
-```
-
-### 4.2 What counts as a pass
-
-**The mount, which is the whole point:**
-
-- `indi_eqmod_telescope` connects over `/dev/ttyUSB0` with **no SynScan app
-  running anywhere**, and reports `CONNECTION.CONNECT = On`.
-- `EQUATORIAL_EOD_COORD` shows RA and Dec, and the numbers **change while
-  tracking is on** and hold still while it is off.
-- A slew to a named target arrives: `TELESCOPE_TRACK_STATE` goes Busy, then Ok,
-  and the tube is pointing where you asked.
-- A sync accepts new coordinates and `EQUATORIAL_EOD_COORD` reads them back.
-- Pulse guide: writing `TELESCOPE_TIMED_GUIDE_NS` produces a small, visible
-  correction. It does not have to be accurate — it has to *happen*.
-
-**The rest:**
-
-- **ASI533MM Pro** — cools towards −10 °C and holds it, and captures a light
-  frame that lands on disk with sensible ADU values.
-- **EFW** — cycles through all eight positions and reports each one back. Slots
-  6, 7 and 8 are empty; they should still be reachable.
-- **EAF** — moves to an absolute position, reports arriving there, and
-  `FOCUS_TEMPERATURE` reads a plausible ambient temperature.
-- **ASI120MM Mini** — streams frames.
-
-**Pass = all five devices connect, and the mount does all four of slew, track,
-sync and pulse guide over direct USB serial.**
-
-### 4.3 If the mount will not connect directly
-
-Stop. Do not work around it. Record what happened:
-
-1. The exact `indiserver -v` output when the connection is attempted.
-2. What `/dev/serial/by-id/` shows.
-3. Whether the mount connects at all through the SynScan bridge, to establish
-   that the cable and the port are fine.
-4. Whether a different baud rate helps (`mount.baud`, default 115200).
-
-Then the fallback is the WiFi driver, `indi_eqmod_telescope` over TCP or the
-Sky-Watcher WiFi driver, and **that decision is written up as an ADR in
-`docs/decisions/` before any further work** (SPEC section 14, M1). WiFi on a
-terrace is a worse link than a cable and the decision deserves to be recorded
-rather than absorbed.
+**Bad:** anything else. It will name the line it did not like. Usually a missing
+quote mark.
 
 ---
 
-## 5. After it passes
+## Step 3 — Start the drivers
 
-1. Do the **meridian calibration** in
-   [`meridian-calibration.md`](meridian-calibration.md). Twenty minutes in
-   daylight. Until it is done, Nocturne refuses unattended operation.
-2. Note anything that needed changing in `config/equipment.yaml` — port, baud,
-   device labels — so the next session starts from a file that already works.
-3. M2 is polar alignment, plate solving, autofocus, guiding and the meridian
-   flip, and it needs the measured meridian limits from step 1.
+```
+indiserver -v indi_eqmod_telescope
+```
+
+This keeps running and printing. **Leave it.** Open a *second* terminal window
+for everything below.
+
+Watch the first window as you do step 4. It is where the mount's own complaints
+appear.
+
+---
+
+## Step 4 — Connect
+
+In the second window:
+
+```
+.venv/bin/python scripts/bench-test-mount.py
+```
+
+It takes under a minute. It connects, reads what the mount says about itself,
+writes one harmless value (your observing site), reads it back, and
+disconnects. It does not move anything.
+
+---
+
+## What the result means
+
+### Pass
+
+The last line says:
+
+```
+RESULT: PASS — the Wave 150i is talking to the Pi over direct USB serial.
+```
+
+That is the answer we needed. Direct USB serial works, no SynScan bridge. The
+project's biggest unknown is resolved in the good direction.
+
+Stop the `indiserver` window with `Ctrl+C`. You are done. Tell me it passed and
+I will write the outcome up.
+
+### Fail
+
+The last line says:
+
+```
+RESULT: FAIL — <reason>
+```
+
+Do not try to work around it. **Capture the evidence:**
+
+```
+.venv/bin/python scripts/bench-test-mount.py > ~/bench-test.log 2>&1
+```
+
+Then in the `indiserver` window press `Ctrl+C`, and run this to collect
+everything in one file:
+
+```
+{ echo "--- serial devices ---"; ls -l /dev/serial/by-id/ /dev/ttyUSB* 2>&1
+  echo "--- kernel log ---";     dmesg | tail -40
+  echo "--- indi version ---";   indiserver --help 2>&1 | head -5
+  echo "--- config ---";         .venv/bin/nocturne check-config 2>&1
+  echo "--- bench test ---";     cat ~/bench-test.log
+} > ~/wave150i-failure.txt
+```
+
+Send me `~/wave150i-failure.txt`. That has everything I need.
+
+**Then, and only then**, one diagnostic worth doing: connect the mount with the
+SynScan app as it normally works, confirm the mount itself is healthy, and
+disconnect again. If SynScan works and the cable does not, that is the exact
+finding we are looking for, and it decides the fallback. It gets recorded as an
+ADR before any further work.
+
+### Neither — it hangs
+
+If nothing has printed for two minutes, press `Ctrl+C`. That is a fail: the
+mount accepted the connection but never answered. Capture the logs the same way
+and say it hung.
+
+---
+
+## What this test does and does not prove
+
+**Proves:** the cable carries data, `indi_eqmod` recognises the Wave 150i,
+Nocturne can connect it, read its state and write to it — all without SynScan.
+
+**Does not prove:** that slewing, tracking, syncing and pulse guiding work. That
+is deliberate — none of them is safe to exercise blind, and none is needed to
+answer the question this test asks. SPEC section 14 does require them for M1's
+hardware criteria, and they need the OTA fitted, the mount on the tripod and the
+sky. That is **stage two**: a separate session, which should not happen until
+the meridian calibration in
+[`meridian-calibration.md`](meridian-calibration.md) is done — because a slew
+near the meridian with a 200PDS and no tripod extension is the collision this
+project is most concerned about.
+
+> ⚠️ Until M2 lands, Nocturne does not enforce altitude, meridian or Sun limits
+> on a pointing command (see
+> [ADR 0007](decisions/0007-m1-pointing-is-ungated.md) and issue #1). **Do not
+> point the rig at the sky under Nocturne's control yet.** Stage two is done by
+> hand through Ekos, not through Nocturne.
 
 ---
 
 ## Known constraints on this rig
 
 - **No tripod extension.** The tube reaches the tripod legs near the meridian.
-  See the meridian calibration; this is the single most dangerous thing about
-  the setup.
+  This is the most dangerous thing about the setup, and
+  [`meridian-calibration.md`](meridian-calibration.md) exists for it.
 - **SD card, not NVMe.** SPEC section 2.2 lists the NVMe HAT and SSD as a
-  required purchase. Stacking write loads will kill an SD card. M1 does not
-  stack, so it is not blocking yet — M3 is where it starts to matter.
-- **No secondary dew heater.** SPEC section 9.3 makes this blocking for M6:
-  unattended operation is refused without an INDI-controllable dew heater,
-  because a fogged Newtonian secondary has no sharp symptom and costs the second
-  half of the night.
-- **Rain is yours to watch.** There is no observatory and parking does not
+  required purchase. Stacking write loads kill SD cards. Not blocking until M3.
+- **No secondary dew heater.** SPEC section 9.3 makes this blocking for M6.
+- **Rain is yours to watch.** There is no observatory, and parking does not
   protect the equipment (SPEC section 9.4).

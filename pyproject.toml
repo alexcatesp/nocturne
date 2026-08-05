@@ -102,6 +102,9 @@ disable_error_code = ["name-defined", "untyped-decorator", "no-any-return", "val
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]
 asyncio_mode = "auto"
+# -rxX prints expected failures in every run, so the deferred safety limits of
+# issue #1 are visible on every CI page rather than buried.
+addopts = "-rxX"
 markers = [
     "indi: integration test that requires the INDI simulator drivers on PATH",
     "dbus: integration test that requires a DBus session bus",

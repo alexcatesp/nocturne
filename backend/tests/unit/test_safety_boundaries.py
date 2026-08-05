@@ -14,6 +14,7 @@ handle, no import, no writable configuration.
 from __future__ import annotations
 
 import ast
+import hashlib
 import inspect
 from pathlib import Path
 
@@ -38,6 +39,47 @@ EXECUTOR_PACKAGE = "nocturne.executor"
 MUTATING_TRANSPORT_METHODS = frozenset(
     {"write", "connect_device", "disconnect_device", "connect_devices", "start_ekos"}
 )
+
+
+#: Modules permitted to write to disk, and only ever for their own output.
+#: M1 grants nothing; the entries are the ones SPEC assigns output to, added as
+#: those milestones land. nocturne.agent, nocturne.api, nocturne.safety and
+#: nocturne.schemas may never appear here — see the test below.
+MODULES_THAT_MAY_WRITE: frozenset[str] = frozenset()
+
+#: The configuration files. No module may write one, allowlisted or not.
+CONFIGURATION_FILENAMES = ("equipment.yaml", "safety.yaml", "agent.yaml")
+
+#: Calls that put bytes on disk.
+WRITING_METHODS = frozenset(
+    {"write_text", "write_bytes", "writelines", "unlink", "rename", "replace", "mkdir"}
+)
+
+
+def write_calls(path: Path) -> list[tuple[int, str]]:
+    """Every call in ``path`` that writes to disk, as (line number, description)."""
+    found: list[tuple[int, str]] = []
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr in WRITING_METHODS:
+            found.append((node.lineno, f"{node.func.attr}()"))
+        elif node.func.attr == "open" and _opens_for_writing(node):
+            found.append((node.lineno, "open(...)"))
+    return found
+
+
+def _opens_for_writing(node: ast.Call) -> bool:
+    modes = [
+        keyword.value.value
+        for keyword in node.keywords
+        if keyword.arg == "mode" and isinstance(keyword.value, ast.Constant)
+    ]
+    modes += [
+        argument.value for argument in node.args[:1] if isinstance(argument, ast.Constant)
+    ]
+    return any(character in str(mode) for mode in modes for character in "wax+")
 
 
 def python_sources() -> list[Path]:
@@ -138,40 +180,71 @@ class TestTheTransportIsConfinedToTheExecutorPackage:
 class TestConfigurationIsNotWritable:
     """CLAUDE.md invariant 2: the agent cannot write config/safety.yaml."""
 
-    def test_no_module_opens_a_file_for_writing(self) -> None:
+    def test_only_allowlisted_modules_write_to_disk(self) -> None:
+        """Writing is a capability granted per module, not an ambient one.
+
+        M1 writes nothing. M3 onward will: the store writes SQLite, stacking
+        writes FITS, telemetry writes session output. Rather than assert "no
+        writes anywhere" — which would have to be weakened the moment M3
+        landed, and a structural test that gets weakened under deadline
+        pressure is one that gets deleted — the allowlist names who may write.
+        Adding a module to it is a deliberate act with a reviewer attached.
+        """
         offenders: list[str] = []
-        writing_calls = {"write_text", "write_bytes", "unlink", "rename", "replace"}
         for path in python_sources():
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.Call):
-                    continue
-                function = node.func
-                if isinstance(function, ast.Attribute) and function.attr in writing_calls:
-                    offenders.append(f"{module_name(path)}:{node.lineno} {function.attr}()")
-                elif isinstance(function, ast.Attribute) and function.attr == "open":
-                    mode = next(
-                        (
-                            keyword.value.value
-                            for keyword in node.keywords
-                            if keyword.arg == "mode" and isinstance(keyword.value, ast.Constant)
-                        ),
-                        None,
-                    )
-                    positional = next(
-                        (
-                            argument.value
-                            for argument in node.args[:1]
-                            if isinstance(argument, ast.Constant)
-                        ),
-                        None,
-                    )
-                    if any("w" in str(m) or "a" in str(m) for m in (mode, positional) if m):
-                        offenders.append(f"{module_name(path)}:{node.lineno} open(...)")
+            name = module_name(path)
+            if any(name.startswith(allowed) for allowed in MODULES_THAT_MAY_WRITE):
+                continue
+            for line, call in write_calls(path):
+                offenders.append(f"{name}:{line} {call}")
         assert not offenders, (
-            "nothing in the backend may write to disk in M1, and nothing ever "
-            f"writes configuration: {'; '.join(offenders)}"
+            f"{'; '.join(offenders)}\n"
+            "These modules write to disk but are not in MODULES_THAT_MAY_WRITE. "
+            "If the write is legitimate, add the module to that list in this test "
+            "on purpose. Never add nocturne.agent, nocturne.api or nocturne.safety."
         )
+
+    def test_the_allowlist_never_covers_the_agent_the_api_or_the_safety_layer(
+        self,
+    ) -> None:
+        """The three that must never hold a pen, whatever else the list grows."""
+        never = ("nocturne.agent", "nocturne.api", "nocturne.safety", "nocturne.schemas")
+        for forbidden in never:
+            assert not any(
+                allowed.startswith(forbidden) or forbidden.startswith(allowed)
+                for allowed in MODULES_THAT_MAY_WRITE
+            ), f"{forbidden} must never be granted write access"
+
+    def test_no_module_may_write_a_configuration_file(self) -> None:
+        """Unconditional, allowlist or not: nothing writes config/*.yaml.
+
+        A module that both writes to disk and names a configuration file is
+        refused even if it is allowed to write other things.
+        """
+        offenders: list[str] = []
+        for path in python_sources():
+            source = path.read_text(encoding="utf-8")
+            named = [name for name in CONFIGURATION_FILENAMES if name in source]
+            if named and write_calls(path):
+                offenders.append(f"{module_name(path)} writes and names {named}")
+        assert not offenders, "; ".join(offenders)
+
+    def test_loading_the_configuration_does_not_change_it_on_disk(
+        self, config_dir: Path
+    ) -> None:
+        """The behavioural counterpart to the source scan."""
+        before = {
+            name: hashlib.sha256((config_dir / name).read_bytes()).hexdigest()
+            for name in CONFIGURATION_FILENAMES
+        }
+        governor = SafetyGovernor(load_config_bundle(config_dir).safety)
+        governor.validate(ConnectDevice(device="CCD Simulator"))
+        governor.require_autonomy_level("advisory")
+        after = {
+            name: hashlib.sha256((config_dir / name).read_bytes()).hexdigest()
+            for name in CONFIGURATION_FILENAMES
+        }
+        assert before == after
 
     def test_the_loader_opens_configuration_read_only(self) -> None:
         from nocturne.schemas import loader
@@ -279,3 +352,58 @@ class TestDecisionContract:
             pass
 
         assert Anonymous().describe() == "Anonymous"
+
+
+class TestTheBenchTestMovesNothing:
+    """docs/hardware-setup.md promises the operator that no motor turns."""
+
+    #: INDI vectors that command motion. None may appear in the bench script.
+    MOVING_PROPERTIES = (
+        "EQUATORIAL_EOD_COORD",
+        "EQUATORIAL_COORD",
+        "TELESCOPE_PARK",
+        "TELESCOPE_MOTION_NS",
+        "TELESCOPE_MOTION_WE",
+        "TELESCOPE_TIMED_GUIDE",
+        "ON_COORD_SET",
+        "TELESCOPE_ABORT_MOTION",
+    )
+
+    def script(self) -> str:
+        return (PACKAGE_ROOT.parent / "scripts" / "bench-test-mount.py").read_text(
+            encoding="utf-8"
+        )
+
+    def test_the_script_exists_where_the_procedure_says_it_does(self) -> None:
+        assert (PACKAGE_ROOT.parent / "scripts" / "bench-test-mount.py").is_file()
+
+    def test_it_writes_no_property_that_commands_motion(self) -> None:
+        """Every string handed to a write() call, checked against the motion list."""
+        tree = ast.parse(self.script())
+        written: set[str] = set()
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "write"
+            ):
+                written |= {
+                    argument.value
+                    for argument in ast.walk(node)
+                    if isinstance(argument, ast.Constant) and isinstance(argument.value, str)
+                }
+        offenders = sorted(written & set(self.MOVING_PROPERTIES))
+        assert not offenders, (
+            f"the bench script writes {offenders}, which moves the mount. "
+            "docs/hardware-setup.md tells the operator nothing moves."
+        )
+
+    def test_it_never_turns_tracking_on(self) -> None:
+        assert "TRACK_ON" not in self.script()
+
+    def test_the_procedure_promises_no_motion(self) -> None:
+        procedure = (PACKAGE_ROOT.parent / "docs" / "hardware-setup.md").read_text(
+            encoding="utf-8"
+        )
+        assert "Nothing in this procedure moves the mount" in procedure
+        assert "No telescope" in procedure

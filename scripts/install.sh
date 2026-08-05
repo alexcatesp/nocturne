@@ -33,16 +33,23 @@ set -euo pipefail
 # Versions and defaults. Change here, not in the body.
 # --------------------------------------------------------------------------
 
-# SPEC section 4: INDI >= 2.2.3. Pinned to a tag so that a build is reproducible.
-readonly INDI_VERSION="${NOCTURNE_INDI_VERSION:-v2.2.3}"
+# SPEC section 4 sets a FLOOR of INDI 2.2.3, not an exact version. These are the
+# current upstream tags at or above it, verified against the real upstreams.
+# indi and indi-3rdparty are held in lockstep: the ZWO drivers link the core, and
+# the projects release together. v2.2.4.1 and v2.2.4.2 exist for the core only,
+# with no matching 3rdparty tag, so v2.2.4 is the newest pair.
+readonly INDI_VERSION="${NOCTURNE_INDI_VERSION:-v2.2.4}"
 readonly INDI_MINIMUM="2.2.3"
-readonly STELLARSOLVER_VERSION="${NOCTURNE_STELLARSOLVER_VERSION:-2.6}"
-# NOTE: the first three tags are verified to exist upstream; invent.kde.org was
-# not reachable from the environment this was written in, so the KStars tag
-# follows the same convention but is unconfirmed. require_pinned_ref() fails
-# loudly rather than silently building a branch. To list the real tags:
-#   git ls-remote --tags https://invent.kde.org/education/kstars.git | tail
-readonly KSTARS_VERSION="${NOCTURNE_KSTARS_VERSION:-v3.7.0}"
+readonly STELLARSOLVER_VERSION="${NOCTURNE_STELLARSOLVER_VERSION:-2.8}"
+
+# KStars is DELIBERATELY UNSET. See docs/decisions/0006-building-from-source.md.
+# invent.kde.org is not reachable from the environment this was written in, and
+# the KDE mirror on GitHub is missing whole release series (no v3.6.x, no
+# v3.7.x), so it cannot be used to confirm a tag. Rather than guess, the build
+# stops and asks. Confirm the tag on a machine that can reach KDE:
+#   git ls-remote --tags https://invent.kde.org/education/kstars.git | grep 3.8
+# then:  export NOCTURNE_KSTARS_VERSION=<tag>
+readonly KSTARS_VERSION="${NOCTURNE_KSTARS_VERSION:-}"
 
 readonly INDI_REPO="https://github.com/indilib/indi.git"
 readonly INDI_3RDPARTY_REPO="https://github.com/indilib/indi-3rdparty.git"
@@ -362,7 +369,7 @@ build_stellarsolver() {
 }
 
 build_kstars() {
-    step "Building KStars ${KSTARS_VERSION}"
+    step "Building KStars ${KSTARS_VERSION:-<unpinned>}"
     if [[ ${SKIP_KSTARS} -eq 1 ]]; then
         warn "skipped at your request; Nocturne cannot drive Ekos without it"
         return
@@ -370,6 +377,19 @@ build_kstars() {
     if command -v kstars >/dev/null 2>&1; then
         ok "KStars is already installed ($(kstars --version 2>&1 | head -n1))"
         return
+    fi
+    if [[ -z ${KSTARS_VERSION} ]]; then
+        fail "no KStars version is pinned, and this installer will not guess one.
+    Building the wrong release is not cosmetic: the Optical Trains DBus interface
+    the executor bridge targets arrived in 3.8.2, and an older build would have
+    Nocturne working around the absence of an interface that exists upstream.
+
+    Find the current stable tag on a machine that can reach KDE:
+        git ls-remote --tags https://invent.kde.org/education/kstars.git | grep 3.8
+    then re-run with:
+        NOCTURNE_KSTARS_VERSION=<tag> ./scripts/install.sh
+
+    Or --skip-kstars to install INDI and Nocturne now and add KStars later."
     fi
     install_kstars_dependencies
     fetch_source "${KSTARS_REPO}" "${KSTARS_VERSION}" "${BUILD_DIR}/kstars"
