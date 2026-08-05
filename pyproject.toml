@@ -1,0 +1,97 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nocturne"
+version = "0.1.0"
+description = "Agent-orchestrated deep-sky astrophotography controller for Raspberry Pi 5"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "GPL-3.0-or-later" }
+
+# Runtime dependencies for milestone M1 only. Later milestones add astropy,
+# photutils, numpy, fastapi and the Anthropic client (SPEC section 4).
+dependencies = [
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "dbus-next>=0.2.3",
+]
+
+[project.scripts]
+nocturne = "nocturne.main:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "hypothesis>=6.100",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "types-PyYAML",
+]
+
+# SPEC section 6 lists the Pydantic configuration models under config/schemas/.
+# They live in the Python package at backend/nocturne/schemas/ and config/schemas
+# is a symlink to it, so the documented layout holds while the import path,
+# packaging and type checking stay conventional.
+# See docs/decisions/0003-config-schema-location.md.
+[tool.setuptools.packages.find]
+where = ["backend"]
+include = ["nocturne*"]
+
+[tool.ruff]
+line-length = 96
+target-version = "py311"
+src = ["backend"]
+# config/schemas is a symlink to backend/nocturne/schemas; lint the real path only.
+extend-exclude = ["config/schemas"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "A",    # flake8-builtins
+    "C4",   # flake8-comprehensions
+    "ASYNC",
+    "S",    # flake8-bandit
+    "PT",   # flake8-pytest-style
+    "SIM",  # flake8-simplify
+    "TID",  # flake8-tidy-imports
+    "RUF",
+]
+ignore = [
+    "S101",  # assert is the point of a test suite
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests legitimately spawn subprocesses and bind sockets.
+"backend/tests/*" = ["S603", "S607", "S104"]
+
+[tool.mypy]
+plugins = ["pydantic.mypy"]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+disallow_any_unimported = true
+disallow_any_explicit = false  # justified per-use with a comment; see CLAUDE.md section 6
+files = ["backend/nocturne", "backend/tests"]
+mypy_path = "backend"
+
+[[tool.mypy.overrides]]
+module = ["dbus_next.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+asyncio_mode = "auto"
+markers = [
+    "indi: integration test that requires the INDI simulator drivers on PATH",
+    "dbus: integration test that requires a DBus session bus",
+]
+filterwarnings = ["error"]
