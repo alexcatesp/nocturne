@@ -10,7 +10,8 @@ listed in SPEC.md section 4.
 | ADR | Title | Status |
 |---|---|---|
 | [0001](0001-executor-layering.md) | Ekos for modules, direct INDI for properties | Accepted |
-| [0002](0002-async-indi-client.md) | An async INDI client in place of pyindi-client | Accepted |
+| [0002](0002-async-indi-client.md) | An async INDI client in place of pyindi-client | Accepted, revised |
 | [0003](0003-config-schema-location.md) | Where the Pydantic configuration models live | Accepted |
 | [0004](0004-closed-vocabularies.md) | Closed enumerations where the specification lists examples | Accepted |
 | [0005](0005-executor-transport-settings.md) | Executor transport timings without a fourth YAML file | Accepted |
+| [0006](0006-building-from-source.md) | Building INDI, StellarSolver and KStars from source, at pinned tags | Accepted |

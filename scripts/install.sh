@@ -37,7 +37,12 @@ set -euo pipefail
 readonly INDI_VERSION="${NOCTURNE_INDI_VERSION:-v2.2.3}"
 readonly INDI_MINIMUM="2.2.3"
 readonly STELLARSOLVER_VERSION="${NOCTURNE_STELLARSOLVER_VERSION:-2.6}"
-readonly KSTARS_VERSION="${NOCTURNE_KSTARS_VERSION:-stable-v3.7.0}"
+# NOTE: the first three tags are verified to exist upstream; invent.kde.org was
+# not reachable from the environment this was written in, so the KStars tag
+# follows the same convention but is unconfirmed. require_pinned_ref() fails
+# loudly rather than silently building a branch. To list the real tags:
+#   git ls-remote --tags https://invent.kde.org/education/kstars.git | tail
+readonly KSTARS_VERSION="${NOCTURNE_KSTARS_VERSION:-v3.7.0}"
 
 readonly INDI_REPO="https://github.com/indilib/indi.git"
 readonly INDI_3RDPARTY_REPO="https://github.com/indilib/indi-3rdparty.git"
@@ -62,9 +67,12 @@ REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly REPO_ROOT
 
 BUILD_DIR="${NOCTURNE_BUILD_DIR:-${BUILD_DIR_DEFAULT}}"
+# Which commit of each upstream component this machine actually built.
+VERSIONS_LOCK="${BUILD_DIR}/versions.lock"
 INDEX_DIR="${NOCTURNE_INDEX_DIR:-${INDEX_DIR_DEFAULT}}"
 JOBS="$(nproc 2>/dev/null || echo 2)"
 CHECK_ONLY=0
+ALLOW_UNPINNED=0
 SKIP_INDICES=0
 SKIP_KSTARS=0
 ASSUME_YES=0
@@ -92,6 +100,7 @@ usage() {
 
 Options:
   --check              verify an existing installation and exit
+  --allow-unpinned     permit a non-tag upstream ref (build is not reproducible)
   --build-dir DIR      where to clone and build (default ~/.cache/nocturne-build)
   --index-dir DIR      where to put astrometry indices (default /usr/share/astrometry)
   --jobs N             parallel compile jobs (default: nproc)
@@ -140,17 +149,56 @@ confirm() {
     [[ ${reply} == [yY]* ]]
 }
 
-# Clone or update a repository at a tag, and echo nothing on success.
+# Clone or update a repository at a tag, verify the ref does not move, and
+# record the commit that was actually built. See
+# docs/decisions/0006-building-from-source.md.
 fetch_source() {
     local repo="$1" ref="$2" dir="$3"
+    local name
+    name="$(basename "${dir}")"
+
     if [[ -d ${dir}/.git ]]; then
-        info "updating $(basename "${dir}")"
-        git -C "${dir}" fetch --tags --depth 1 origin "${ref}"
+        info "updating ${name}"
+        git -C "${dir}" fetch --quiet --tags --depth 1 origin "${ref}"
         git -C "${dir}" checkout --quiet FETCH_HEAD
     else
-        info "cloning $(basename "${dir}") at ${ref}"
+        info "cloning ${name} at ${ref}"
         git clone --quiet --depth 1 --branch "${ref}" "${repo}" "${dir}"
     fi
+
+    require_pinned_ref "${name}" "${ref}" "${dir}"
+    record_built_version "${name}" "${ref}" "$(git -C "${dir}" rev-parse HEAD)"
+}
+
+# A branch name is a moving target: two installs a week apart would build
+# different code, and a bug could appear between two nights with nothing in
+# this repository having changed.
+require_pinned_ref() {
+    local name="$1" ref="$2" dir="$3"
+    if git -C "${dir}" describe --exact-match --tags HEAD >/dev/null 2>&1; then
+        return 0
+    fi
+    if [[ ${ALLOW_UNPINNED} -eq 1 ]]; then
+        warn "${name} is at '${ref}', which is not a tag. The build is NOT reproducible."
+        return 0
+    fi
+    fail "${name} ref '${ref}' is not a tag, so this build would not be reproducible.
+    Two installs of the same Nocturne commit could then behave differently, and a
+    change upstream could alter the rig between two nights.
+    Set the matching NOCTURNE_*_VERSION variable to a tag, or pass
+    --allow-unpinned if you are deliberately testing an upstream branch."
+}
+
+record_built_version() {
+    local name="$1" ref="$2" sha="$3"
+    mkdir -p "$(dirname "${VERSIONS_LOCK}")"
+    # Replace any earlier line for this component, then append the current one.
+    if [[ -f ${VERSIONS_LOCK} ]]; then
+        grep -v "^${name} " "${VERSIONS_LOCK}" > "${VERSIONS_LOCK}.tmp" || true
+        mv "${VERSIONS_LOCK}.tmp" "${VERSIONS_LOCK}"
+    fi
+    printf '%s %s %s\n' "${name}" "${ref}" "${sha}" >> "${VERSIONS_LOCK}"
+    info "${name} ${ref} (${sha})"
 }
 
 cmake_build_install() {
@@ -471,6 +519,15 @@ verify() {
         problems=$(( problems + 1 ))
     fi
 
+    if [[ -s ${VERSIONS_LOCK} ]]; then
+        ok "upstream components built on this machine:"
+        while read -r component ref sha; do
+            info "  ${component} ${ref} ${sha}"
+        done < "${VERSIONS_LOCK}"
+    else
+        warn "no ${VERSIONS_LOCK}; this install was not built by this script"
+    fi
+
     if [[ -x ${REPO_ROOT}/.venv/bin/nocturne ]]; then
         "${REPO_ROOT}/.venv/bin/nocturne" check-config --config-dir "${REPO_ROOT}/config" ||
             { warn "the shipped configuration did not validate"; problems=$(( problems + 1 )); }
@@ -519,7 +576,8 @@ main() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --check)        CHECK_ONLY=1 ;;
-            --build-dir)    BUILD_DIR="$2"; shift ;;
+            --allow-unpinned) ALLOW_UNPINNED=1 ;;
+            --build-dir)    BUILD_DIR="$2"; VERSIONS_LOCK="${BUILD_DIR}/versions.lock"; shift ;;
             --index-dir)    INDEX_DIR="$2"; shift ;;
             --jobs)         JOBS="$2"; shift ;;
             --skip-indices) SKIP_INDICES=1 ;;
