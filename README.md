@@ -10,9 +10,12 @@ guiding, focusing, slewing, and safety limits.
 The agent never touches hardware and never sees pixels. It reads scalar telemetry and
 calls a constrained tool API, every call validated by a non-bypassable safety layer.
 
-> ⚠️ **Status: pre-alpha.** Milestone M1 (instrument control) is not yet complete. This
-> software moves a telescope. Do not run it unattended until you have completed the
-> meridian calibration procedure for your own mount and tripod.
+> ⚠️ **Status: pre-alpha.** Milestone M1 (instrument control) passes its automated
+> criteria against the INDI simulators; the hardware test on the real rig is still
+> outstanding — see [`docs/hardware-setup.md`](docs/hardware-setup.md). Nothing
+> beyond M1 exists yet: no plate solving, no guiding, no telemetry, no web app, no
+> agent. This software moves a telescope. Do not run it unattended until you have
+> completed the meridian calibration procedure for your own mount and tripod.
 
 ---
 
@@ -84,7 +87,23 @@ cd nocturne
 ./scripts/install.sh
 ```
 
-Then edit `config/equipment.yaml` and `config/safety.yaml` before first run.
+Native install on Raspberry Pi OS 64-bit, no Docker. It builds INDI, the ZWO
+drivers, StellarSolver and KStars from source and downloads astrometry.net
+indices sized for the 39-arcminute field — one to three hours on a Pi 5, and safe
+to interrupt and re-run.
+
+Then edit `config/equipment.yaml` and `config/safety.yaml`, and check them:
+
+```bash
+.venv/bin/nocturne check-config    # fails loudly, naming the offending field
+./scripts/install.sh --check       # verifies the installation itself
+```
+
+The whole test suite runs against the INDI simulator drivers, with no hardware:
+
+```bash
+.venv/bin/pytest
+```
 
 ## ⚠️ Safety
 

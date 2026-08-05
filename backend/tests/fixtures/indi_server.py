@@ -112,6 +112,10 @@ class IndiServerProcess:
             command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
         self._wait_for_port()
+        # The port opens before indiserver has finished forking its drivers, so
+        # waiting on the port alone leaves a window in which driver_pids() is
+        # short and kill_driver() cannot find its target.
+        self.wait_for_drivers()
 
     def stop(self) -> None:
         """Stop indiserver and every driver it spawned."""
@@ -167,6 +171,18 @@ class IndiServerProcess:
             if executable:
                 found[os.path.basename(executable)] = child
         return found
+
+    def wait_for_drivers(self, timeout: float = 30.0) -> None:
+        """Wait until every configured driver has been forked."""
+        expected = {os.path.basename(driver) for driver in self.drivers}
+        deadline = time.monotonic() + timeout
+        running: set[str] = set()
+        while time.monotonic() < deadline:
+            running = set(self.driver_pids())
+            if expected <= running:
+                return
+            time.sleep(0.1)
+        raise TimeoutError(f"indiserver did not start: {', '.join(sorted(expected - running))}")
 
     def kill_driver(self, driver: str) -> int:
         """SIGKILL one driver. indiserver respawns it; the client must cope."""

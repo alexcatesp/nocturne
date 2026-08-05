@@ -1,0 +1,37 @@
+# KStars/Ekos, headless, on its own session bus.
+#
+# The Ekos DBus bridge attaches to org.kde.kstars on the session bus this unit
+# creates. Nocturne must run with the same DBUS_SESSION_BUS_ADDRESS.
+
+[Unit]
+Description=KStars/Ekos headless for Nocturne
+Documentation=https://github.com/alexcatesp/nocturne
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nocturne
+Group=nocturne
+
+# No display on the Pi. Qt's offscreen platform plugin keeps KStars headless
+# without an X server or Wayland compositor.
+Environment=QT_QPA_PLATFORM=offscreen
+Environment=HOME=/home/nocturne
+
+# dbus-run-session gives KStars a session bus of its own, so that the bridge has
+# something to attach to whether or not anyone is logged in.
+ExecStart=/usr/bin/dbus-run-session -- /usr/local/bin/kstars
+
+Restart=on-failure
+RestartSec=10
+
+# KStars is not trusted with more of the system than it needs.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/nocturne
+
+[Install]
+WantedBy=multi-user.target

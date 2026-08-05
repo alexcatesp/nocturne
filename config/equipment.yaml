@@ -38,7 +38,10 @@ imaging_camera:
     ramp_c_per_min: 2.0          # never exceed; TEC longevity
     settle_tolerance_c: 0.5
     settle_timeout_s: 600
-  gain_profiles:                 # measured values; see docs/sensor-characterisation.md
+  gain_profiles:
+    # PLACEHOLDERS. SPEC §15 requires these to be measured, not taken from the
+    # datasheet: the exposure solver divides by them. Measure with the procedure
+    # in docs/sensor-characterisation.md before trusting any computed exposure.
     - name: "hcg"
       gain: 100
       read_noise_e: 1.5
