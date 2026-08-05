@@ -66,12 +66,15 @@ select = [
     "RUF",
 ]
 ignore = [
-    "S101",  # assert is the point of a test suite
+    "S101",     # assert is the point of a test suite
+    "ASYNC109", # an explicit timeout argument is the API; the timeouts are config values
 ]
 
 [tool.ruff.lint.per-file-ignores]
 # Tests legitimately spawn subprocesses and bind sockets.
 "backend/tests/*" = ["S603", "S607", "S104"]
+# SafetyViolation reads better than SafetyViolationError at every call site.
+"backend/nocturne/safety/governor.py" = ["N818"]
 
 [tool.mypy]
 plugins = ["pydantic.mypy"]
@@ -86,6 +89,15 @@ mypy_path = "backend"
 [[tool.mypy.overrides]]
 module = ["dbus_next.*"]
 ignore_missing_imports = true
+implicit_reexport = true
+
+# dbus-next reads method annotations as DBus signature strings, so the stub
+# service cannot carry Python return annotations.
+[[tool.mypy.overrides]]
+module = ["tests.fixtures.fake_kstars"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disable_error_code = ["name-defined", "untyped-decorator", "no-any-return", "valid-type"]
 
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]
