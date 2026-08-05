@@ -1,0 +1,48 @@
+# Nocturne safety configuration — SPEC section 5.2.
+#
+# This file governs the safety layer (SPEC section 9). Values here are
+# ENFORCED, not advisory. The agent cannot read-modify-write this file and
+# cannot alter these values at runtime; the loaded model is immutable.
+#
+# Do not set meridian.calibrated to true until you have completed the
+# procedure in docs/meridian-calibration.md on your own mount and tripod.
+
+limits:
+  altitude_min_deg: 25           # below this, do not slew or track
+  altitude_max_deg: 88           # zenith avoidance
+  sun_avoidance_deg: 30          # angular distance from Sun, always
+  sun_altitude_max_deg: -12      # no imaging above nautical twilight
+
+  # MERIDIAN / TRIPOD COLLISION — see section 9.1. Calibrated, not guessed.
+  meridian:
+    calibrated: false            # implementation MUST refuse unattended mode while false
+    calibration_date: null
+    hour_angle_east_limit_deg: null   # measured by procedure in section 9.1
+    hour_angle_west_limit_deg: null
+    safety_margin_deg: 5
+    flip_strategy: "flip"        # "flip" | "stop"
+    flip_settle_s: 30
+    require_solve_after_flip: true
+
+  cooling:
+    max_delta_from_ambient_c: 35
+    abort_if_power_draw_exceeds_percent: 95
+
+abort_conditions:
+  guiding_lost_s: 180
+  plate_solve_failures_consecutive: 3
+  cloud_star_count_drop_percent: 60
+  cloud_confirm_frames: 2
+  mount_communication_loss_s: 30
+  disk_free_min_gb: 20
+
+on_abort:
+  action: "park"                 # stop tracking, park, warm TEC on ramp, close session
+  notify: true
+  notify_severity: "alarm"
+
+agent:
+  max_tokens_per_session: 400000
+  max_calls_per_hour: 60
+  on_budget_exhausted: "autonomous"   # continue on deterministic rules, no agent
+  on_api_unreachable: "autonomous"

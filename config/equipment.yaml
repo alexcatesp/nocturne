@@ -1,0 +1,104 @@
+# Nocturne equipment configuration — SPEC section 5.1.
+#
+# Reference hardware. Nothing here is hardcoded anywhere in the code: the
+# operator's migration from guide scope to OAG, and the addition of a coma
+# corrector, are changes to this file only.
+
+site:
+  name: "Tudela de Duero"
+  latitude: 41.5806
+  longitude: -4.5814
+  elevation_m: 700
+  timezone: "Europe/Madrid"
+
+optical_trains:
+  - id: "native"
+    active: true
+    focal_length_mm: 1000        # nominal; overridden by plate solve
+    aperture_mm: 200
+    corrector: null
+  - id: "mpcc"
+    active: false
+    focal_length_mm: 1000
+    aperture_mm: 200
+    corrector: "Baader MPCC Mark III"
+    backfocus_mm: 55
+
+imaging_camera:
+  indi_driver: "indi_asi_ccd"
+  name: "ZWO CCD ASI533MM Pro"
+  pixel_size_um: 3.76
+  width_px: 3008
+  height_px: 3008
+  bit_depth: 14
+  mono: true
+  cooled: true
+  cooling:
+    target_c: -10
+    ramp_c_per_min: 2.0          # never exceed; TEC longevity
+    settle_tolerance_c: 0.5
+    settle_timeout_s: 600
+  gain_profiles:                 # measured values; see docs/sensor-characterisation.md
+    - name: "hcg"
+      gain: 100
+      read_noise_e: 1.5
+      full_well_e: 21000
+      e_per_adu: 0.32
+
+filter_wheel:
+  indi_driver: "indi_asi_wheel"
+  slots:
+    1: { name: "Dark",  type: "dark",       offset_steps: 0 }
+    2: { name: "L",     type: "luminance",  offset_steps: 0 }
+    3: { name: "R",     type: "red",        offset_steps: 0 }
+    4: { name: "G",     type: "green",      offset_steps: 0 }
+    5: { name: "B",     type: "blue",       offset_steps: 0 }
+    6: { name: null,    type: "empty" }
+    7: { name: null,    type: "empty" }
+    8: { name: null,    type: "empty" }
+
+focuser:
+  indi_driver: "indi_asi_focuser"
+  backlash_steps: 0              # measured; see M2 procedure
+  step_size_um: null             # measured
+  max_position: 60000
+  temperature_compensation:
+    enabled: false               # enable only after coefficient measured
+    coefficient_steps_per_c: null
+  refocus_triggers:
+    delta_temperature_c: 1.5
+    hfd_drift_percent: 15
+    elapsed_minutes: 60
+    on_filter_change: true
+
+guiding:
+  # These values change entirely when migrating to OAG. Never hardcode.
+  mode: "guidescope"             # "guidescope" | "oag"
+  camera:
+    indi_driver: "indi_asi_ccd"
+    name: "ZWO CCD ASI120MM Mini"
+    pixel_size_um: 3.75
+    width_px: 1280
+    height_px: 960
+  focal_length_mm: 120
+  exposure_s: 2.0
+  calibration_step_ms: 1500
+  dither:
+    enabled: true
+    pixels: 3.0
+    settle_tolerance_px: 1.5
+    settle_timeout_s: 120
+    every_n_frames: 1
+  thresholds:
+    rms_warn_arcsec: 1.2
+    rms_abort_arcsec: 2.5
+    max_consecutive_lost_frames: 5
+
+mount:
+  indi_driver: "indi_eqmod_telescope"
+  device_label: "Wave 150i"
+  connection: "serial"           # USB serial preferred over WiFi
+  port: "/dev/ttyUSB0"
+  baud: 115200
+  slew_rate_max_deg_s: 3.0       # deliberately below the mount's 7.5; portable setup
+  counterweight_fitted: false

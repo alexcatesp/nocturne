@@ -1,0 +1,63 @@
+# Nocturne agent configuration — SPEC section 5.3.
+#
+# Fields are exactly those named in SPEC section 5.3: model selection, system
+# prompt path, autonomy level, event subscription list, poll interval, and the
+# tool allow-list per autonomy level.
+#
+# The autonomy level here is the level requested at startup. It is not
+# authoritative: the safety governor refuses "supervised" and "autonomous"
+# while limits.meridian.calibrated is false in safety.yaml (SPEC section 9.1),
+# and any operator action demotes the agent to "advisory" (SPEC section 8.4).
+
+model: "claude-sonnet-5"
+system_prompt_path: "config/prompts/agent_system.md"
+
+# SPEC section 8.4. Default is "advisory": the agent proposes, the operator approves.
+autonomy_level: "advisory"
+
+# SPEC section 8.3 — pull, not push. The agent is woken by the scheduled poll
+# and by the subscribed event codes below. It is never called per frame.
+poll_interval_minutes: 15
+
+event_subscriptions:
+  - "BLOCK_COMPLETE"
+  - "TARGET_LIMIT_APPROACHING"
+  - "FOCUS_DRIFT"
+  - "TRANSPARENCY_DROP"
+  - "GUIDING_DEGRADED"
+  - "REJECT_RATE_HIGH"
+  - "SOLVE_FAILED"
+  - "TARGET_COMPLETE"
+  - "SESSION_START"
+  - "SESSION_END"
+  - "SAFETY_ABORT"
+
+# SPEC section 8.2. The read-only tools are always available and are implicit at
+# every level; they may not be revoked here. Only action tools are listed.
+# Every call, at every level, is still validated by the safety governor.
+tool_allow_list:
+  observer: []
+  advisory:
+    - "propose_plan"
+    - "set_target"
+    - "request_refocus"
+    - "request_meridian_decision"
+    - "skip_target"
+    - "end_session"
+    - "notify_operator"
+  supervised:
+    - "propose_plan"
+    - "set_target"
+    - "request_refocus"
+    - "request_meridian_decision"
+    - "skip_target"
+    - "end_session"
+    - "notify_operator"
+  autonomous:
+    - "propose_plan"
+    - "set_target"
+    - "request_refocus"
+    - "request_meridian_decision"
+    - "skip_target"
+    - "end_session"
+    - "notify_operator"

@@ -1,0 +1,260 @@
+"""Equipment configuration schema — SPEC section 5.1.
+
+The shipped ``config/equipment.yaml`` must carry the reference hardware of
+SPEC section 2.1 exactly, and the schema must reject anything malformed
+loudly rather than filling in defaults.
+"""
+
+from __future__ import annotations
+
+import copy
+from pathlib import Path
+from typing import Any
+
+import pytest
+from pydantic import ValidationError
+
+from nocturne.schemas import EquipmentConfig, load_equipment_config
+
+
+@pytest.fixture
+def raw(config_dir: Path) -> dict[str, Any]:
+    """The shipped equipment.yaml parsed to a plain dict, safe to mutate."""
+    import yaml
+
+    with (config_dir / "equipment.yaml").open(encoding="utf-8") as handle:
+        loaded = yaml.safe_load(handle)
+    assert isinstance(loaded, dict)
+    return copy.deepcopy(loaded)
+
+
+class TestShippedFile:
+    def test_shipped_equipment_config_validates(self, config_dir: Path) -> None:
+        config = load_equipment_config(config_dir / "equipment.yaml")
+        assert isinstance(config, EquipmentConfig)
+
+    def test_site_matches_spec_section_2_2(self, config_dir: Path) -> None:
+        site = load_equipment_config(config_dir / "equipment.yaml").site
+        assert site.name == "Tudela de Duero"
+        assert site.latitude == pytest.approx(41.5806)
+        assert site.longitude == pytest.approx(-4.5814)
+        assert site.elevation_m == 700
+        assert site.timezone == "Europe/Madrid"
+
+    def test_imaging_camera_matches_asi533mm_pro(self, config_dir: Path) -> None:
+        camera = load_equipment_config(config_dir / "equipment.yaml").imaging_camera
+        assert camera.name == "ZWO CCD ASI533MM Pro"
+        assert camera.pixel_size_um == pytest.approx(3.76)
+        assert camera.width_px == 3008
+        assert camera.height_px == 3008
+        assert camera.bit_depth == 14
+        assert camera.mono is True
+        assert camera.cooled is True
+        assert camera.cooling.target_c == pytest.approx(-10.0)
+        assert camera.cooling.ramp_c_per_min == pytest.approx(2.0)
+
+    def test_filter_wheel_has_eight_slots_five_populated(self, config_dir: Path) -> None:
+        wheel = load_equipment_config(config_dir / "equipment.yaml").filter_wheel
+        assert sorted(wheel.slots) == [1, 2, 3, 4, 5, 6, 7, 8]
+        assert [wheel.slots[i].name for i in (1, 2, 3, 4, 5)] == ["Dark", "L", "R", "G", "B"]
+        assert all(wheel.slots[i].type == "empty" for i in (6, 7, 8))
+
+    def test_mount_is_configured_for_direct_usb_serial(self, config_dir: Path) -> None:
+        """SPEC section 5.1: USB serial preferred over WiFi. This is the M1 HITL subject."""
+        mount = load_equipment_config(config_dir / "equipment.yaml").mount
+        assert mount.indi_driver == "indi_eqmod_telescope"
+        assert mount.device_label == "Wave 150i"
+        assert mount.connection == "serial"
+        assert mount.port == "/dev/ttyUSB0"
+        assert mount.baud == 115200
+        assert mount.counterweight_fitted is False
+
+    def test_guiding_is_guidescope_with_configurable_focal_length(
+        self, config_dir: Path
+    ) -> None:
+        """SPEC section 2.1 migration note: guide scale must never be a constant."""
+        guiding = load_equipment_config(config_dir / "equipment.yaml").guiding
+        assert guiding.mode == "guidescope"
+        assert guiding.focal_length_mm == pytest.approx(120.0)
+        assert guiding.camera.pixel_size_um == pytest.approx(3.75)
+
+
+class TestDerivedPlateScales:
+    """SPEC section 2.1 nominal values, derived rather than hardcoded."""
+
+    def test_imaging_plate_scale(self, config_dir: Path) -> None:
+        config = load_equipment_config(config_dir / "equipment.yaml")
+        assert config.imaging_plate_scale_arcsec_per_px() == pytest.approx(0.776, abs=1e-3)
+
+    def test_imaging_field_of_view(self, config_dir: Path) -> None:
+        config = load_equipment_config(config_dir / "equipment.yaml")
+        width, height = config.imaging_fov_arcmin()
+        assert width == pytest.approx(38.9, abs=0.1)
+        assert height == pytest.approx(38.9, abs=0.1)
+
+    def test_guide_plate_scale(self, config_dir: Path) -> None:
+        config = load_equipment_config(config_dir / "equipment.yaml")
+        assert config.guide_plate_scale_arcsec_per_px() == pytest.approx(6.45, abs=1e-2)
+
+    def test_guide_plate_scale_follows_config_on_oag_migration(
+        self, raw: dict[str, Any]
+    ) -> None:
+        """Migrating to an OAG is a config change, never a code change."""
+        raw["guiding"]["mode"] = "oag"
+        raw["guiding"]["focal_length_mm"] = 1000
+        config = EquipmentConfig.model_validate(raw)
+        assert config.guide_plate_scale_arcsec_per_px() == pytest.approx(0.77, abs=1e-2)
+
+    def test_plate_scale_follows_active_optical_train(self, raw: dict[str, Any]) -> None:
+        raw["optical_trains"][0]["active"] = False
+        raw["optical_trains"][1]["active"] = True
+        raw["optical_trains"][1]["focal_length_mm"] = 2000
+        config = EquipmentConfig.model_validate(raw)
+        assert config.active_optical_train.id == "mpcc"
+        assert config.imaging_plate_scale_arcsec_per_px() == pytest.approx(0.388, abs=1e-3)
+
+
+class TestStrictness:
+    def test_unknown_key_is_rejected(self, raw: dict[str, Any]) -> None:
+        raw["telescope_colour"] = "black"
+        with pytest.raises(ValidationError, match="telescope_colour"):
+            EquipmentConfig.model_validate(raw)
+
+    def test_unknown_nested_key_is_rejected(self, raw: dict[str, Any]) -> None:
+        raw["mount"]["wifi_ssid"] = "terrace"
+        with pytest.raises(ValidationError, match="wifi_ssid"):
+            EquipmentConfig.model_validate(raw)
+
+    def test_missing_required_section_is_rejected(self, raw: dict[str, Any]) -> None:
+        del raw["mount"]
+        with pytest.raises(ValidationError, match="mount"):
+            EquipmentConfig.model_validate(raw)
+
+    def test_config_is_immutable(self, config_dir: Path) -> None:
+        """CLAUDE.md invariant 2: nothing modifies configuration at runtime."""
+        config = load_equipment_config(config_dir / "equipment.yaml")
+        with pytest.raises(ValidationError):
+            config.mount.counterweight_fitted = True  # type: ignore[misc]
+
+    @pytest.mark.parametrize("latitude", [-90.1, 90.1, 1000.0])
+    def test_impossible_latitude_is_rejected(
+        self, raw: dict[str, Any], latitude: float
+    ) -> None:
+        raw["site"]["latitude"] = latitude
+        with pytest.raises(ValidationError, match="latitude"):
+            EquipmentConfig.model_validate(raw)
+
+    @pytest.mark.parametrize("longitude", [-180.1, 180.1])
+    def test_impossible_longitude_is_rejected(
+        self, raw: dict[str, Any], longitude: float
+    ) -> None:
+        raw["site"]["longitude"] = longitude
+        with pytest.raises(ValidationError, match="longitude"):
+            EquipmentConfig.model_validate(raw)
+
+    def test_unknown_timezone_is_rejected(self, raw: dict[str, Any]) -> None:
+        raw["site"]["timezone"] = "Mars/Olympus_Mons"
+        with pytest.raises(ValidationError, match="timezone"):
+            EquipmentConfig.model_validate(raw)
+
+    @pytest.mark.parametrize("value", [0.0, -1.0])
+    def test_non_positive_pixel_size_is_rejected(
+        self, raw: dict[str, Any], value: float
+    ) -> None:
+        raw["imaging_camera"]["pixel_size_um"] = value
+        with pytest.raises(ValidationError, match="pixel_size_um"):
+            EquipmentConfig.model_validate(raw)
+
+    @pytest.mark.parametrize("value", [0.0, -2.0])
+    def test_non_positive_cooling_ramp_is_rejected(
+        self, raw: dict[str, Any], value: float
+    ) -> None:
+        """A zero or negative ramp rate would mean "cool instantly" — TEC damage."""
+        raw["imaging_camera"]["cooling"]["ramp_c_per_min"] = value
+        with pytest.raises(ValidationError, match="ramp_c_per_min"):
+            EquipmentConfig.model_validate(raw)
+
+    def test_non_positive_focal_length_is_rejected(self, raw: dict[str, Any]) -> None:
+        raw["optical_trains"][0]["focal_length_mm"] = 0
+        with pytest.raises(ValidationError, match="focal_length_mm"):
+            EquipmentConfig.model_validate(raw)
+
+    def test_negative_slew_rate_is_rejected(self, raw: dict[str, Any]) -> None:
+        raw["mount"]["slew_rate_max_deg_s"] = -1.0
+        with pytest.raises(ValidationError, match="slew_rate_max_deg_s"):
+            EquipmentConfig.model_validate(raw)
+
+    def test_unknown_guiding_mode_is_rejected(self, raw: dict[str, Any]) -> None:
+        raw["guiding"]["mode"] = "off_axis"
+        with pytest.raises(ValidationError, match="mode"):
+            EquipmentConfig.model_validate(raw)
+
+    def test_unknown_mount_connection_is_rejected(self, raw: dict[str, Any]) -> None:
+        raw["mount"]["connection"] = "bluetooth"
+        with pytest.raises(ValidationError, match="connection"):
+            EquipmentConfig.model_validate(raw)
+
+
+class TestCrossFieldConsistency:
+    def test_exactly_one_optical_train_must_be_active(self, raw: dict[str, Any]) -> None:
+        raw["optical_trains"][1]["active"] = True
+        with pytest.raises(ValidationError, match="exactly one active optical train"):
+            EquipmentConfig.model_validate(raw)
+
+    def test_no_active_optical_train_is_rejected(self, raw: dict[str, Any]) -> None:
+        raw["optical_trains"][0]["active"] = False
+        with pytest.raises(ValidationError, match="exactly one active optical train"):
+            EquipmentConfig.model_validate(raw)
+
+    def test_duplicate_optical_train_id_is_rejected(self, raw: dict[str, Any]) -> None:
+        raw["optical_trains"][1]["id"] = "native"
+        with pytest.raises(ValidationError, match="duplicate optical train id"):
+            EquipmentConfig.model_validate(raw)
+
+    def test_empty_slot_may_not_be_named(self, raw: dict[str, Any]) -> None:
+        raw["filter_wheel"]["slots"][6] = {"name": "Ha", "type": "empty"}
+        with pytest.raises(ValidationError, match="empty"):
+            EquipmentConfig.model_validate(raw)
+
+    def test_populated_slot_must_be_named(self, raw: dict[str, Any]) -> None:
+        raw["filter_wheel"]["slots"][2] = {"name": None, "type": "luminance"}
+        with pytest.raises(ValidationError, match="name"):
+            EquipmentConfig.model_validate(raw)
+
+    def test_slot_numbering_must_be_contiguous_from_one(self, raw: dict[str, Any]) -> None:
+        raw["filter_wheel"]["slots"][9] = {"name": None, "type": "empty"}
+        del raw["filter_wheel"]["slots"][1]
+        with pytest.raises(ValidationError, match="contiguous"):
+            EquipmentConfig.model_validate(raw)
+
+    def test_a_dark_slot_is_required_for_calibration_frames(self, raw: dict[str, Any]) -> None:
+        """SPEC section 10.2: darks and dark-flats are captured with the Dark slot."""
+        raw["filter_wheel"]["slots"][1] = {"name": None, "type": "empty"}
+        with pytest.raises(ValidationError, match="dark"):
+            EquipmentConfig.model_validate(raw)
+
+    def test_duplicate_gain_profile_name_is_rejected(self, raw: dict[str, Any]) -> None:
+        raw["imaging_camera"]["gain_profiles"].append(
+            {
+                "name": "hcg",
+                "gain": 200,
+                "read_noise_e": 1.2,
+                "full_well_e": 10000,
+                "e_per_adu": 0.16,
+            }
+        )
+        with pytest.raises(ValidationError, match="duplicate gain profile"):
+            EquipmentConfig.model_validate(raw)
+
+    def test_at_least_one_gain_profile_is_required(self, raw: dict[str, Any]) -> None:
+        raw["imaging_camera"]["gain_profiles"] = []
+        with pytest.raises(ValidationError, match="gain_profiles"):
+            EquipmentConfig.model_validate(raw)
+
+    def test_temperature_compensation_requires_a_measured_coefficient(
+        self, raw: dict[str, Any]
+    ) -> None:
+        """SPEC section 15: disabled until the coefficient has been measured."""
+        raw["focuser"]["temperature_compensation"]["enabled"] = True
+        with pytest.raises(ValidationError, match="coefficient_steps_per_c"):
+            EquipmentConfig.model_validate(raw)
