@@ -46,13 +46,3 @@ class IndiSettings(StrictModel):
 
     read_chunk_bytes: PositiveInt = 65536
     max_message_bytes: PositiveInt = MAX_MESSAGE_BYTES
-
-    def backoff_delays(self) -> list[float]:
-        """The reconnection delay sequence, for logging and for tests."""
-        delays: list[float] = []
-        delay = self.reconnect_initial_delay_s
-        attempts = self.reconnect_max_attempts or 10
-        for _ in range(attempts):
-            delays.append(delay)
-            delay = min(delay * self.reconnect_backoff_factor, self.reconnect_max_delay_s)
-        return delays

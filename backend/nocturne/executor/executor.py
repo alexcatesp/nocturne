@@ -83,15 +83,16 @@ class Executor:
         """The governor every command passes through."""
         return self._governor
 
-    @property
-    def client(self) -> IndiClient:
-        """The INDI client, for reads. It has no unvalidated mutating callers."""
-        return self._client
+    # There is deliberately no accessor returning the INDI client or the Ekos
+    # bridge. Both carry mutating methods that the governor does not see, so
+    # handing one to a caller would be the second door CLAUDE.md invariant 1
+    # says must not exist. Reads are proxied below; writes go through
+    # _execute(). Enforced by tests/unit/test_safety_boundaries.py.
 
     @property
-    def ekos(self) -> EkosBridge | None:
-        """The Ekos bridge, if one was supplied."""
-        return self._ekos
+    def is_ekos_connected(self) -> bool:
+        """Whether the Ekos bridge, if one was supplied, is attached to KStars."""
+        return self._ekos is not None and self._ekos.is_connected
 
     # ----------------------------------------------------------------- reads
 

@@ -99,6 +99,8 @@ class FakeIndiServer:
         self.devices = (
             devices if devices is not None else {"Focuser Simulator": focuser_device()}
         )
+        #: Set False to leave a write unanswered, so a test can catch one in flight.
+        self.answer_writes = True
         self._server: asyncio.Server | None = None
         self._writers: list[asyncio.StreamWriter] = []
         self.port = 0
@@ -209,6 +211,8 @@ class FakeIndiServer:
                 prop.values[element] = float(raw)
             else:
                 prop.values[element] = raw
+        if not self.answer_writes:
+            return
         prop.state = "Ok"
         writer.write(prop.update(device, "Ok"))
         await writer.drain()

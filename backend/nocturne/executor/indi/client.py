@@ -67,6 +67,15 @@ class IndiTimeoutError(IndiError):
     """A property did not arrive, or did not settle, within its timeout."""
 
 
+class IndiDeviceLostError(IndiError):
+    """The device went away while a caller was waiting on it.
+
+    Raised in place of letting the caller sit out a timeout that cannot now be
+    met: the driver has gone, and the session layer should hear about it at
+    once rather than in forty-five seconds.
+    """
+
+
 class ConnectionState(StrEnum):
     """Where the client is with respect to indiserver."""
 
@@ -409,6 +418,13 @@ class IndiClient:
                 self._revisions.pop(key, None)
             self._connected_devices.discard(message.device)
             if removed:
+                self._fail_waiters_for_device(
+                    message.device,
+                    IndiDeviceLostError(
+                        f"{message.device} went away while waiting on it; its driver "
+                        "has died. It will be reconnected if indiserver respawns it."
+                    ),
+                )
                 logger.warning(
                     "device vanished; its driver has gone away",
                     extra={"device": message.device, "was_connected": was_connected},
@@ -487,6 +503,17 @@ class IndiClient:
                 future.set_result(prop)
             else:
                 remaining.append((predicate, waited_key, future))
+        self._waiters = remaining
+
+    def _fail_waiters_for_device(self, device: str, error: Exception) -> None:
+        """Fail only the waiters watching ``device``; leave the others alone."""
+        remaining: list[tuple[Predicate, tuple[str, str], asyncio.Future[Property]]] = []
+        for entry in self._waiters:
+            _, (waited_device, _), future = entry
+            if waited_device == device and not future.done():
+                future.set_exception(error)
+            else:
+                remaining.append(entry)
         self._waiters = remaining
 
     def _fail_waiters(self, error: Exception) -> None:
@@ -663,6 +690,7 @@ __all__ = [
     "EventHandler",
     "IndiClient",
     "IndiConnectionError",
+    "IndiDeviceLostError",
     "IndiError",
     "IndiEvent",
     "IndiTimeoutError",
