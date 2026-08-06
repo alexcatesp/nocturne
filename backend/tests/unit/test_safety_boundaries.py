@@ -310,9 +310,7 @@ class TestRARunningIsNotTreatedAsMotion:
         for path in python_sources():
             source = path.read_text(encoding="utf-8")
             for line_number, line in enumerate(source.splitlines(), start=1):
-                named = [
-                    name for name in self.UNRESOLVED_MOTION_PROPERTIES if name in line
-                ]
+                named = [name for name in self.UNRESOLVED_MOTION_PROPERTIES if name in line]
                 if named:
                     offenders.append(f"{module_name(path)}:{line_number} names {named}")
         assert not offenders, (

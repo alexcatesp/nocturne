@@ -86,9 +86,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 def run_strip(source_dir: Path, expected: int) -> subprocess.CompletedProcess[str]:
     script = f"{HARNESS}\n{extract_function('strip_werror')}\n"
     script += f'strip_werror "{source_dir}" {expected}\n'
-    return subprocess.run(
-        ["bash", "-c", script], capture_output=True, text=True, check=False
-    )
+    return subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
 
 
 @pytest.fixture
