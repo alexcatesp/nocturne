@@ -222,6 +222,90 @@ class TestTheSlewRateLimitSurvivesRecovery:
         assert EQMOD_DEVICE not in server.devices
 
 
+class TestWhenTheCeilingCannotBeApplied:
+    """The mount must not be driven at 800x because a write quietly failed."""
+
+    async def test_a_slewspeeds_vector_missing_an_axis_refuses(
+        self, executor: Executor, server: FakeIndiServer
+    ) -> None:
+        one_axis = FakeProperty(
+            name=SLEW_SPEEDS_PROPERTY,
+            kind=PropertyKind.NUMBER,
+            values={RA_SLEW_ELEMENT: 800.0},
+        )
+        server.devices[EQMOD_DEVICE][SLEW_SPEEDS_PROPERTY] = one_axis
+        await server.broadcast(one_axis.define(EQMOD_DEVICE))
+
+        def one_axis_is_cached() -> bool:
+            cached = executor.get_property(EQMOD_DEVICE, SLEW_SPEEDS_PROPERTY)
+            return cached is not None and DE_SLEW_ELEMENT not in cached.elements
+
+        await _until(one_axis_is_cached)
+
+        link = MountLink(executor, mount_config(), device=EQMOD_DEVICE)
+        async with link:
+            with pytest.raises(MountBringUpError, match=DE_SLEW_ELEMENT):
+                await link.bring_up()
+
+    async def test_a_failure_during_re_application_is_logged_not_swallowed(
+        self,
+        executor: Executor,
+        server: FakeIndiServer,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The watcher runs in a bare task: an exception there has nowhere to go."""
+        link = MountLink(executor, mount_config(), device=EQMOD_DEVICE)
+        async with link:
+            await link.bring_up()
+
+            # The driver comes back without an axis, so the re-application fails.
+            broken = fresh_driver()[EQMOD_DEVICE]
+            broken[SLEW_SPEEDS_PROPERTY] = FakeProperty(
+                name=SLEW_SPEEDS_PROPERTY,
+                kind=PropertyKind.NUMBER,
+                values={RA_SLEW_ELEMENT: 800.0},
+            )
+            caplog.clear()
+            with caplog.at_level("ERROR", logger="nocturne.executor.mount"):
+                await server.kill_driver(EQMOD_DEVICE)
+                await server.restart_driver(EQMOD_DEVICE, broken)
+                await _until(lambda: "800x sidereal" in caplog.text)
+
+        assert "may be at its default" in caplog.text
+
+    async def test_the_conversion_failure_happens_before_anything_connects(
+        self, executor: Executor, server: FakeIndiServer
+    ) -> None:
+        """A limit the driver cannot express is caught at construction."""
+        with pytest.raises(MountBringUpError):
+            MountLink(executor, mount_config(slew_rate_max_deg_s=0.001), device=EQMOD_DEVICE)
+        assert (EQMOD_DEVICE, "CONNECTION") not in server.writes
+
+
+class TestTheWatcherLifecycle:
+    async def test_watching_twice_subscribes_once(self, executor: Executor) -> None:
+        link = MountLink(executor, mount_config(), device=EQMOD_DEVICE)
+        async with link:
+            link.watch()
+            link.watch()
+            assert link.is_watching
+        assert not link.is_watching
+
+    async def test_closing_an_unwatched_link_is_harmless(self, executor: Executor) -> None:
+        link = MountLink(executor, mount_config(), device=EQMOD_DEVICE)
+        link.stop_watching()
+        await link.aclose()
+        assert not link.is_watching
+
+    async def test_the_configured_ceiling_is_readable_without_connecting(
+        self, executor: Executor
+    ) -> None:
+        link = MountLink(executor, mount_config(), device=EQMOD_DEVICE)
+        assert link.device == EQMOD_DEVICE
+        assert link.slew_speed_multiple == 718
+        assert link.port_in_use is None
+
+
 class TestTheBaudRateIsSetBeforeConnect:
     """FIELD-NOTES-M1 section 2.2."""
 
