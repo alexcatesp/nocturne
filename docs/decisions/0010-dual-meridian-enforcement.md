@@ -2,8 +2,9 @@
 
 Status: **Accepted, not yet implemented** · 2026-08-06 · Milestone M2
 Evidence: docs/FIELD-NOTES-M1.md section 3.1 (measured on the reference rig).
-Approved by the operator 2026-08-06, with the addition in "Disagreement
-handling" below: a divergence also invalidates the calibration.
+Approved by the operator 2026-08-06, with two additions in "Disagreement
+handling" below: a divergence also invalidates the calibration, and that
+invalidation must survive an orchestrator restart.
 
 > **Nothing in this ADR is implemented, and nothing should be until M2 brings
 > the numeric limits.** Building the second enforcement layer before the first
@@ -134,13 +135,30 @@ required:
    Note the consequence for the write path. `safety.yaml` is the one file
    nothing may write — that is CLAUDE.md invariant 2, enforced unconditionally
    in `test_safety_boundaries.py`, and this ADR does not weaken it. The
-   invalidation is therefore recorded as **session state that the governor
-   consults alongside the file**: an in-memory flag that forces
-   `require_autonomy_level()` to refuse regardless of what `safety.yaml` says,
-   persisted next to the session record rather than in the configuration, and
-   cleared only by the operator editing `safety.yaml` by hand as part of
-   recalibrating. The governor takes the *more* restrictive of the two. It can
-   never take the less restrictive one, and that direction must be tested.
+   invalidation is therefore recorded as **state the governor consults
+   alongside the file**: a flag that forces `require_autonomy_level()` to
+   refuse regardless of what `safety.yaml` says, held outside the
+   configuration, and cleared only by the operator editing `safety.yaml` by
+   hand as part of recalibrating. The governor takes the *more* restrictive of
+   the two. It can never take the less restrictive one, and that direction must
+   be tested.
+
+   **The flag must survive an orchestrator restart.** An in-memory flag is not
+   enough, and the failure mode is specific: the process dies after a
+   divergence, systemd restarts it, the flag is gone, and `autonomous` is
+   silently available again — at the one moment in the project's life when it
+   is least safe. A crash is not evidence that the geometry is fine. It is
+   arguably evidence of the opposite.
+
+   So it is persisted, the governor loads it **at startup, before it will
+   accept any autonomy level at all**, and the restart path gets its own test:
+   induce a divergence, kill the process, start it again, assert `supervised`
+   and `autonomous` are still refused. Not a test of the flag's setter — a test
+   of the process boundary, because the process boundary is what fails.
+
+   Clearing it stays a deliberate human act tied to recalibration. Nothing
+   automatic clears it: not a successful slew, not a clean shutdown, not a new
+   session, not time passing.
 
 3. **Notify at severity `alarm`.** SPEC section 5.2 already has
    `on_abort.notify_severity`. This is the case the operator has said is worth
@@ -188,6 +206,38 @@ Proposed handling:
 - Any code path that continues in `supervised` or `autonomous` when the driver's
   state is unknown.
 
+### Where the flag lives — an ordering problem to settle
+
+The operator's instruction is to persist it in SQLite. SPEC section 4 already
+fixes SQLite (WAL) as the persistence technology, so that is the right
+destination and there is no argument about it.
+
+The collision is scheduling: **SQLite persistence is an M3 deliverable** (SPEC
+section 14, M3 — "Frame analysis pipeline, SQLite persistence, calibration
+library"), while this ADR is to be implemented in M2. Written naively, M2 would
+need a store that does not exist yet.
+
+Three ways out, and this is flagged rather than decided quietly because it
+changes M2's scope:
+
+1. **Bring forward a minimal store into M2** — one SQLite file, one table, one
+   row, created and read by the governor, which M3's store later extends rather
+   than replaces. **Recommended.** It introduces no technology SPEC does not
+   already require, it puts the flag in its final home immediately, and the
+   whole of it is smaller than the migration that option 2 eventually needs.
+2. **A dedicated state file in M2, migrated to SQLite in M3.** Avoids touching
+   M3's design early, at the cost of writing a second persistence format and
+   then a migration for one boolean. More total work, and a migration is
+   exactly the sort of thing that gets deferred and then forgotten.
+3. **Defer the persistence to M3, and in M2 refuse `supervised` and
+   `autonomous` for the remainder of the process only.** Rejected: it is the
+   hole this section exists to close, and shipping it knowingly for a milestone
+   is worse than not having claimed the protection at all.
+
+Option 1 unless the operator says otherwise. Either way, **the restart test is
+not optional and does not wait for M3** — whatever holds the flag in M2 must
+pass it.
+
 ## Consequences
 
 - Two enforcement layers, one truth, one direction of flow. The complexity is
@@ -206,6 +256,12 @@ Proposed handling:
   `backend/tests/unit/test_safety_boundaries.py`, which is a deliberate act with
   this ADR attached. It does **not** relax the unconditional rule that no module
   may write `config/*.yaml`.
+- The governor gains a dependency on persistent state, which it does not have
+  today: at M1 it is a pure function of frozen configuration. That is a real
+  loss of simplicity in the most important class in the repository, and it is
+  the price of the invalidation surviving a restart. It should be the only such
+  dependency, and it should be read once at startup rather than consulted per
+  command.
 - The conversion from hour angle to alt/az is new arithmetic in a safety path.
   It needs property-based tests (CLAUDE.md section 2): for every declination and
   every hour angle, the derived boundary must be at least as restrictive as the
@@ -226,8 +282,15 @@ Proposed handling:
 ## Still open, to settle before this is implemented
 
 1. Should the driver's limits also be written in `advisory` mode, where the
-   operator is at the keyboard? Writing them is harmless; the argument for not
-   doing so is that `advisory` is where experimenting happens.
+   operator is at the keyboard?
+
+   **Operator's preliminary view, 2026-08-06: yes, write them in advisory too.**
+   The driver's enforcement is not the agent's authority, so there is no reason
+   to tie it to the autonomy level; and two layers that agree at all times are
+   simpler to reason about than two layers that agree only sometimes. To be
+   confirmed in M2 with the numbers in hand — the thing that could change it is
+   if writing the limits turns out to interfere with the calibration procedure
+   itself, which is performed in `advisory`.
 2. `HORIZONLIMITSONLIMITTRACK=On` with `SLEW=Off` and `GOTO=Off` is the
    driver's current state, so it enforces against tracking only. Enabling all
    three is the defence-in-depth position, and it is what this ADR assumes.
