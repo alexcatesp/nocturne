@@ -106,6 +106,9 @@ class FakeIndiServer:
         self.port = 0
         #: Number of client connections accepted, so a test can assert a reconnect.
         self.connection_count = 0
+        #: Every write received, as (device, property), in arrival order. Order
+        #: is the point for anything that must happen before CONNECT.
+        self.writes: list[tuple[str, str]] = []
 
     async def __aenter__(self) -> Self:
         await self.start()
@@ -196,6 +199,7 @@ class FakeIndiServer:
 
         device = node.get("device") or ""
         name = node.get("name") or ""
+        self.writes.append((device, name))
         device_properties = self.devices.get(device)
         if device_properties is None or name not in device_properties:
             return
