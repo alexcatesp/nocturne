@@ -15,8 +15,14 @@ import sys
 from pathlib import Path
 
 from nocturne.schemas import ConfigError, NocturneConfig, load_config_bundle
+from nocturne.storage import describe_storage, inspect_storage
 
 DEFAULT_CONFIG_DIR = Path("config")
+
+#: The filesystem the startup report describes. FIELD-NOTES-M1 section 6 asks
+#: for the root device specifically: it is what the operator can check by eye,
+#: and on the reference rig it is the microSD everything else sits on.
+REPORTED_FILESYSTEM = Path("/")
 
 
 def _format_report(config: NocturneConfig) -> str:
@@ -63,9 +69,31 @@ def _format_report(config: NocturneConfig) -> str:
             f"  Autonomy:      {config.agent.autonomy_level} "
             f"(model {config.agent.model}, poll every "
             f"{config.agent.poll_interval_minutes} min)",
+            *_storage_lines(),
             meridian_line,
         ]
     )
+
+
+def _storage_lines() -> list[str]:
+    """The storage report, and a warning if a stacking job would be refused.
+
+    Never raises. This command exists to validate the configuration; storage is
+    reported alongside it, and a filesystem that cannot be inspected must not
+    turn a valid configuration into a failed check.
+    """
+    try:
+        report = inspect_storage(REPORTED_FILESYSTEM)
+    except OSError as exc:
+        return [f"  Storage:       could not be inspected ({exc})"]
+
+    lines = [f"  Storage:       {describe_storage(report)}"]
+    if report.is_removable_flash:
+        lines.append(
+            "                 REMOVABLE FLASH — stacking jobs are refused on this "
+            "device (SPEC section 2.2). Fit the NVMe SSD before M3."
+        )
+    return lines
 
 
 def _check_config(config_dir: Path) -> int:

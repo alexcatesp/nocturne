@@ -25,6 +25,60 @@ class TestCheckConfig:
         assert "meridian" in out.lower()
         assert "not calibrated" in out.lower()
 
+    def test_report_names_the_storage_and_its_free_space(
+        self, config_dir: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """docs/FIELD-NOTES-M1.md section 6: say what we are running on."""
+        main(["check-config", "--config-dir", str(config_dir)])
+        out = capsys.readouterr().out
+        assert "Storage:" in out
+        assert "GB free" in out
+
+    def test_removable_flash_is_called_out_not_merely_reported(
+        self,
+        config_dir: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A microSD is the reference rig's current state; it must not read as fine."""
+        from nocturne import main as main_module
+        from nocturne.storage import DeviceKind, StorageReport
+
+        monkeypatch.setattr(
+            main_module,
+            "inspect_storage",
+            lambda path: StorageReport(
+                path=path,
+                device="mmcblk0",
+                kind=DeviceKind.SD_CARD,
+                removable=True,
+                rotational=False,
+                free_gb=19.4,
+                total_gb=29.0,
+            ),
+        )
+        assert main(["check-config", "--config-dir", str(config_dir)]) == 0
+        out = capsys.readouterr().out
+        assert "mmcblk0" in out
+        assert "stacking" in out.lower()
+        assert "refused" in out.lower()
+
+    def test_a_storage_that_cannot_be_read_does_not_stop_the_check(
+        self,
+        config_dir: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The configuration is what this command validates. Storage is a bonus."""
+        from nocturne import main as main_module
+
+        def explode(_path: Path) -> None:
+            raise OSError("no such thing")
+
+        monkeypatch.setattr(main_module, "inspect_storage", explode)
+        assert main(["check-config", "--config-dir", str(config_dir)]) == 0
+        assert "could not be inspected" in capsys.readouterr().out
+
     def test_invalid_config_exits_non_zero_and_explains(
         self, tmp_path: Path, config_dir: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
