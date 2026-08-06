@@ -1,12 +1,13 @@
 # 0010 — Meridian limits enforced in the governor *and* in the driver
 
-Status: **Proposed** · 2026-08-06 · Milestone M2 (calibration lands there)
+Status: **Accepted, not yet implemented** · 2026-08-06 · Milestone M2
 Evidence: docs/FIELD-NOTES-M1.md section 3.1 (measured on the reference rig).
+Approved by the operator 2026-08-06, with the addition in "Disagreement
+handling" below: a divergence also invalidates the calibration.
 
-> **Nothing in this ADR is implemented.** It is written now, while the evidence
-> is fresh, so that the decision is made before the meridian calibration rather
-> than during it. It needs the operator's agreement before any code is written,
-> because it changes what happens on the night the two layers disagree.
+> **Nothing in this ADR is implemented, and nothing should be until M2 brings
+> the numeric limits.** Building the second enforcement layer before the first
+> one exists would mean deriving a backstop from limits that are still null.
 
 ## Context
 
@@ -66,7 +67,7 @@ angle limit does not map to one horizon point; it maps to a curve.
    wrong: it is exactly the arrangement that produces a stale file, because
    nothing re-derives it when `safety.yaml` changes.
 
-## Decision (proposed)
+## Decision
 
 **Option 3.** The governor remains authoritative and the driver's horizon limits
 become a derived, re-generated backstop.
@@ -85,7 +86,7 @@ definition — the question is only what to *do* about the disagreement.
 
 At the start of every session, after the mount connects and before the first
 slew, in the same bring-up sequence that applies the slew-rate ceiling
-(`MountLink`, ADR pending). Never at any other time. Not from the agent, not
+(`MountLink`, `backend/nocturne/executor/mount.py`). Never at any other time. Not from the agent, not
 from the API, not from a running session.
 
 ### Derivation
@@ -107,9 +108,43 @@ Three distinct cases, three distinct responses:
 
 | Case | Response |
 |---|---|
-| The driver refuses a command the governor approved | **Abort the session and park.** The governor believed this was safe and the mount disagreed. That is not a condition to retry through; it means the two models of the geometry have diverged and neither can be trusted until a human looks. |
+| The driver refuses a command the governor approved | **Abort the session, park, invalidate the calibration, alarm.** See below. |
 | The governor refuses a command the driver would have allowed | Normal operation. The governor is stricter by design; this is the expected case and is logged at debug, not as a fault. |
 | The driver's limits cannot be written at all | **Refuse to start `supervised` or `autonomous`.** `advisory` may continue with an explicit warning, because a human is watching. |
+
+The first row is the one that needed a decision, and it has three parts, all
+required:
+
+1. **Park.** The governor believed the command was safe and the mount
+   disagreed. That is not a condition to retry through: the two models of where
+   the tripod is have diverged, and neither can be trusted until a person
+   looks. `on_abort.action` already covers stopping, parking and warming the
+   TEC on its ramp (SPEC section 9.4).
+
+2. **Set `meridian.calibrated` back to `false`.** This is the operator's
+   addition, and it follows directly from SPEC section 9.1 paragraph 7, which
+   already invalidates the limits when `counterweight_fitted` changes. The
+   reasoning is the same and the evidence is stronger: a disagreement between
+   two independently derived enforcement layers means *something about the
+   geometry moved and nobody knows what*. Once `calibrated` is false,
+   `supervised` and `autonomous` are refused with a hard failure until the
+   operator recalibrates (CLAUDE.md invariant 3). The night ends; the next one
+   does not start on an unexamined assumption.
+
+   Note the consequence for the write path. `safety.yaml` is the one file
+   nothing may write — that is CLAUDE.md invariant 2, enforced unconditionally
+   in `test_safety_boundaries.py`, and this ADR does not weaken it. The
+   invalidation is therefore recorded as **session state that the governor
+   consults alongside the file**: an in-memory flag that forces
+   `require_autonomy_level()` to refuse regardless of what `safety.yaml` says,
+   persisted next to the session record rather than in the configuration, and
+   cleared only by the operator editing `safety.yaml` by hand as part of
+   recalibrating. The governor takes the *more* restrictive of the two. It can
+   never take the less restrictive one, and that direction must be tested.
+
+3. **Notify at severity `alarm`.** SPEC section 5.2 already has
+   `on_abort.notify_severity`. This is the case the operator has said is worth
+   waking them for.
 
 ### The stale-file failure mode
 
@@ -161,6 +196,11 @@ Proposed handling:
 - A new class of session abort exists: "the driver refused something the
   governor allowed". It should be rare to the point of never, and if it is not
   rare, the derivation is wrong and that is exactly what needs to be visible.
+- **That abort costs the following nights, not just the current one.** With the
+  calibration invalidated, nothing unattended runs until the operator repeats
+  the SPEC section 9.1 procedure. That is the intended price: the alternative
+  is continuing to point a 200PDS near a tripod on the strength of a model that
+  has just been contradicted.
 - Nocturne writes a file outside its own tree, `~/.indi/HorizonData.txt`. That
   requires adding the writing module to `MODULES_THAT_MAY_WRITE` in
   `backend/tests/unit/test_safety_boundaries.py`, which is a deliberate act with
@@ -177,16 +217,21 @@ Proposed handling:
   That is a night's work with the operator present, and it is a prerequisite of
   M6, not of M2.
 
-## Open questions for the operator
+## Answered
 
-1. Is "abort and park when the driver refuses something the governor allowed"
-   the behaviour you want? It is the conservative reading. The alternative — log
-   it, stop the current target, continue with the next — keeps more of the night
-   but continues operating with two disagreeing models of where the tripod is.
-2. Should the driver's limits also be written in `advisory` mode, where you are
-   at the keyboard? Writing them is harmless; the argument for not doing so is
-   that `advisory` is where you would be experimenting.
-3. `HORIZONLIMITSONLIMITTRACK=On` with `SLEW=Off` and `GOTO=Off` is the driver's
-   current state, which means it enforces against tracking only. Enabling all
-   three is the defence-in-depth position. Confirm that is what you want before
-   it is written.
+1. ~~Is "abort and park" the behaviour you want?~~ **Yes**, and with the
+   calibration invalidated and an `alarm` notification alongside it. Recorded
+   above. (Operator, 2026-08-06.)
+
+## Still open, to settle before this is implemented
+
+1. Should the driver's limits also be written in `advisory` mode, where the
+   operator is at the keyboard? Writing them is harmless; the argument for not
+   doing so is that `advisory` is where experimenting happens.
+2. `HORIZONLIMITSONLIMITTRACK=On` with `SLEW=Off` and `GOTO=Off` is the
+   driver's current state, so it enforces against tracking only. Enabling all
+   three is the defence-in-depth position, and it is what this ADR assumes.
+   Confirm before it is written.
+
+Neither blocks anything today: implementation is M2 work and both questions are
+answerable then.

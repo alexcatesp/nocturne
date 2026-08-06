@@ -138,7 +138,32 @@ Assume they will read your summary on a phone, at night, on a terrace.
 
 ## 10. Current state
 
-Milestone: **M1 not started.**
+Milestone: **M1 in progress.** Branch `m1/instrument-control`. Do not start M2.
 
-First task: repository scaffolding, `install.sh`, config schemas with validation, INDI +
-Ekos bring-up against simulators, and the DBus bridge. Then the HITL Wave 150i test.
+**Done, on real hardware.** The Wave 150i connects to `indi_eqmod_telescope` over direct
+USB serial, with no SynScan bridge — the M1 HITL mount test **passed**, and the WiFi
+fallback is not taken (ADR 0011). INDI 2.2.4 and the three third-party components
+(`libasi`, `indi-asi`, `indi-eqmod`) are built and installed on the Pi. Everything learned
+in the process is in [`docs/FIELD-NOTES-M1.md`](docs/FIELD-NOTES-M1.md), which is evidence
+rather than instruction: where it contradicts this file or SPEC.md, the contradiction is
+the point.
+
+**Done, against simulators.** Config schemas, the INDI client, the Ekos DBus bridge, the
+safety governor skeleton, the mount bring-up sequence, and CI (ruff, mypy --strict,
+shellcheck, pytest against real simulator drivers).
+
+**Outstanding for M1.**
+
+- Bench tests for the camera, filter wheel, focuser and guide camera. Operator, on the rig.
+- KStars is **not built**. Its tag and commit SHA are unresolved, and `install.sh` refuses
+  to guess one. Nothing Ekos-dependent can be verified until it is.
+- The Qt6/KF6 package names in `install.sh` are unverified against Trixie.
+- `install.sh` has never been run end to end.
+
+Do not work around any of those four. They are the operator's to resolve.
+
+**Known limitations, each with a red test or a tracked issue.** `SetProperty` is
+ungated, so a raw property write can still slew the mount (ADR 0007, issue #1, three
+`xfail(strict=True)` tests). The Ekos DBus method names are guesses (issue #2). The
+semantics of `RASTATUS.RARunning` are unknown, and a structural test forbids the name
+appearing in the package until they are established (issue #3).

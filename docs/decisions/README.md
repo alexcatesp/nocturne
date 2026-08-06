@@ -18,5 +18,5 @@ listed in SPEC.md section 4.
 | [0007](0007-m1-pointing-is-ungated.md) | M1 leaves pointing ungated, and how that is contained | Accepted (limitation) |
 | [0008](0008-raspberry-pi-os-trixie.md) | Raspberry Pi OS Trixie, not Bookworm — KStars 3.8.x is Qt6/KF6 | Accepted |
 | [0009](0009-werror-and-trixie-gcc.md) | INDI's forced `-Werror` is stripped before building on Trixie | Accepted |
-| [0010](0010-dual-meridian-enforcement.md) | Meridian limits enforced in the governor *and* in the driver | **Proposed — needs the operator's decision** |
+| [0010](0010-dual-meridian-enforcement.md) | Meridian limits enforced in the governor *and* in the driver | Accepted — implement in M2 |
 | [0011](0011-m1-mount-link-verified.md) | The Wave 150i runs on direct USB serial; the WiFi fallback is not taken | Accepted |
