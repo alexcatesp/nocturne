@@ -41,8 +41,18 @@ connected to the mount, this test tells you nothing.
 ls -l /dev/serial/by-id/
 ```
 
-**Good:** one line comes back, mentioning something like `CH340`, `CP210x`,
-`FTDI` or `Prolific`, ending in `-port0`.
+**Good:** one line comes back. On the Wave 150i it reads:
+
+```
+usb-STMicroelectronics_STM32_Virtual_ComPort_8F8B50B10E31-if00 -> ../../ttyACM0
+```
+
+The serial number in the middle is yours and will differ. The two things to
+check are `STM32_Virtual_ComPort` and that it points at **`ttyACM`**, not
+`ttyUSB`. The Wave 150i has no separate USB-serial chip: the controller board
+presents the port itself, so the kernel loads `cdc_acm`. If you have read
+elsewhere to look for `CH340`, `CP210x` or `FTDI`, that advice is for other
+mounts and does not apply here.
 
 **Bad:** `No such file or directory`, or nothing listed.
 
@@ -67,8 +77,18 @@ the path from step 1, in full, in quotes:
 
 ```yaml
 mount:
-  port: "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0"
+  port: "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_8F8B50B10E31-if00"
 ```
+
+Use your own serial number, not the one printed here. Use the
+`/dev/serial/by-id/` path and not `/dev/ttyACM0`: `ttyACM0` is handed out in
+the order things are plugged in, so it can become `ttyACM1` the moment another
+USB serial device appears, and Nocturne would then be talking to the wrong
+device. The `by-id` path never moves.
+
+You can also leave the `port:` line out entirely. The driver finds the mount
+by itself and Nocturne uses whatever it reports; setting `port:` overrides
+that, which is what you want if the driver ever picks the wrong one.
 
 Save with `Ctrl+O`, `Enter`, then `Ctrl+X`.
 
@@ -147,7 +167,7 @@ Then in the `indiserver` window press `Ctrl+C`, and run this to collect
 everything in one file:
 
 ```
-{ echo "--- serial devices ---"; ls -l /dev/serial/by-id/ /dev/ttyUSB* 2>&1
+{ echo "--- serial devices ---"; ls -l /dev/serial/by-id/ /dev/ttyACM* 2>&1
   echo "--- kernel log ---";     dmesg | tail -40
   echo "--- indi version ---";   indiserver --help 2>&1 | head -5
   echo "--- config ---";         .venv/bin/nocturne check-config 2>&1

@@ -30,12 +30,19 @@ from nocturne.schemas import ConfigError, load_config_bundle  # noqa: E402
 #: Properties worth printing, in the order a person would want to read them.
 REPORTED = (
     ("DRIVER_INFO", "driver"),
+    ("MOUNTINFORMATION", "controller"),
+    ("STEPPERS", "encoder counts"),
     ("EQUATORIAL_EOD_COORD", "position (RA/Dec)"),
     ("TELESCOPE_TRACK_STATE", "tracking"),
     ("TELESCOPE_PARK", "park state"),
     ("GEOGRAPHIC_COORD", "site"),
     ("MOUNT_TYPE", "mount type"),
+    ("SLEWSPEEDS", "slew speeds (driver default is 800x sidereal)"),
 )
+
+#: The group that owns /dev/ttyACM*. Without it the connect fails with an
+#: opaque error that reads like a cable fault (FIELD-NOTES-M1 section 2.4).
+SERIAL_GROUP = "dialout"
 
 SETTINGS = IndiSettings(
     connect_timeout_s=15.0,
@@ -88,10 +95,22 @@ async def run() -> int:
         bad(str(exc))
         return verdict_fail("the configuration did not load")
     mount = config.equipment.mount
-    good(f"{mount.device_label} on {mount.port} at {mount.baud} baud")
+    where = mount.port or "the port the driver reports"
+    good(f"{mount.device_label} on {where} at {mount.baud} baud")
     if mount.connection != "serial":
         bad(f"mount.connection is '{mount.connection}', not 'serial'")
         return verdict_fail("this test is only meaningful for a serial connection")
+    if mount.port is not None and not mount.uses_stable_port_path:
+        say(f"    note  {mount.port} moves if another USB serial device is plugged in.")
+        say("          Prefer the /dev/serial/by-id/ path: ls -l /dev/serial/by-id/")
+
+    step(f"Checking {SERIAL_GROUP} group membership")
+    if not _in_serial_group():
+        bad(f"this account is not in the {SERIAL_GROUP} group")
+        say(f"          Fix it with:  sudo usermod -aG {SERIAL_GROUP} $USER")
+        say("          Then log out and log back in — it does not take effect until you do.")
+        return verdict_fail(f"no permission to open the serial port without {SERIAL_GROUP}")
+    good(f"in the {SERIAL_GROUP} group")
 
     step("Connecting to indiserver")
     client = IndiClient(SETTINGS)
@@ -124,14 +143,39 @@ async def _exercise(client: IndiClient, config: object) -> int:
     device = devices[0]
     good(f"device '{device}'")
 
-    step("Pointing the driver at the serial port from equipment.yaml")
+    step("Choosing the serial port")
     try:
-        await client.wait_for_property(device, "DEVICE_PORT", timeout=15.0)
-        await client.write(device, "DEVICE_PORT", {"PORT": mount.port})
-        good(f"port set to {mount.port}")
+        reported = await client.wait_for_property(device, "DEVICE_PORT", timeout=15.0)
+        found = str(reported["PORT"] or "").strip()
+        if mount.port is None:
+            if not found:
+                bad("the driver reported no port and equipment.yaml sets none")
+                return verdict_fail("nothing knows which port the mount is on")
+            good(f"using the port the driver found: {found}")
+        else:
+            if found and found != mount.port:
+                say(f"    note  the driver found {found}; equipment.yaml overrides it")
+            await client.write(device, "DEVICE_PORT", {"PORT": mount.port})
+            good(f"port set to {mount.port}")
     except IndiError as exc:
         bad(str(exc))
         return verdict_fail("the driver would not accept the serial port")
+
+    step("Setting the baud rate  <-- must happen before CONNECT")
+    try:
+        rates = await client.wait_for_property(device, "DEVICE_BAUD_RATE", timeout=15.0)
+        wanted = str(mount.baud)
+        if wanted not in rates.elements:
+            bad(f"the driver does not offer {wanted} baud")
+            say(f"          It offers: {', '.join(sorted(rates.elements))}")
+            return verdict_fail("mount.baud in equipment.yaml is not a rate the driver has")
+        await client.write(
+            device, "DEVICE_BAUD_RATE", {n: (n == wanted) for n in rates.elements}
+        )
+        good(f"{wanted} baud selected (the driver starts at 9600)")
+    except IndiError as exc:
+        bad(str(exc))
+        return verdict_fail("the driver would not accept the baud rate")
 
     step("Connecting the mount  <-- this is the test")
     try:
@@ -169,6 +213,20 @@ async def _exercise(client: IndiClient, config: object) -> int:
         bad(f"did not disconnect cleanly: {exc}")
 
     return verdict_pass()
+
+
+def _in_serial_group() -> bool:
+    """Whether this process can open a device owned by root:dialout."""
+    import grp
+    import os
+
+    try:
+        group = grp.getgrnam(SERIAL_GROUP)
+    except KeyError:
+        # No such group on this system. Say nothing rather than block: the
+        # connect below will fail loudly enough if permissions are the problem.
+        return True
+    return group.gr_gid in os.getgroups()
 
 
 def _readable(prop: object) -> dict[str, str]:
