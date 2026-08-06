@@ -65,8 +65,10 @@ class TestShippedFile:
         assert mount.indi_driver == "indi_eqmod_telescope"
         assert mount.device_label == "Wave 150i"
         assert mount.connection == "serial"
-        assert mount.port is not None
-        assert mount.port.startswith("/dev/serial/by-id/")
+        assert mount.indi_device_name == "EQMod Mount"
+        # No port: the driver reports its own, and a by-id path is one rig's
+        # serial number. See TestMountSerialPort below.
+        assert mount.port is None
         assert mount.baud == 115200
         assert mount.counterweight_fitted is False
 
@@ -261,6 +263,45 @@ class TestCrossFieldConsistency:
             EquipmentConfig.model_validate(raw)
 
 
+class TestTheIndiDeviceNameIsConfiguration:
+    """CLAUDE.md section 6: no hardcoded equipment.
+
+    ``indi_eqmod`` announces itself as "EQMod Mount". That is the driver's name
+    for the device and it is equipment-dependent — a different mount driver
+    announces something else. The operator's name for the same object is
+    "Wave 150i". Two fields, because they are two different things: one is a
+    technical identifier the executor addresses, the other is a label a person
+    reads and a translator translates.
+    """
+
+    def test_the_shipped_config_names_the_device_the_driver_announces(
+        self, config_dir: Path
+    ) -> None:
+        mount = load_equipment_config(config_dir / "equipment.yaml").mount
+        assert mount.indi_device_name == "EQMod Mount"
+
+    def test_it_matches_what_the_real_driver_announced(self) -> None:
+        """Checked against the recorded dump, not against my memory of it."""
+        from tests.fixtures.eqmod import EQMOD_DEVICE
+
+        assert EQMOD_DEVICE == "EQMod Mount"
+
+    def test_the_label_and_the_device_name_are_separate_fields(self, config_dir: Path) -> None:
+        mount = load_equipment_config(config_dir / "equipment.yaml").mount
+        assert mount.device_label == "Wave 150i"
+        assert mount.device_label != mount.indi_device_name
+
+    def test_it_is_required(self, raw: dict[str, Any]) -> None:
+        del raw["mount"]["indi_device_name"]
+        with pytest.raises(ValidationError, match="indi_device_name"):
+            EquipmentConfig.model_validate(raw)
+
+    def test_it_may_not_be_blank(self, raw: dict[str, Any]) -> None:
+        raw["mount"]["indi_device_name"] = "   "
+        with pytest.raises(ValidationError, match="indi_device_name"):
+            EquipmentConfig.model_validate(raw)
+
+
 class TestMountSerialPort:
     """Field notes section 2.1 — the Wave 150i is CDC-ACM, not a USB-serial bridge.
 
@@ -269,11 +310,22 @@ class TestMountSerialPort:
     default pointed at /dev/ttyUSB0, which does not exist on this rig.
     """
 
-    def test_the_shipped_default_is_the_stable_by_id_path(self, config_dir: Path) -> None:
+    def test_the_shipped_config_names_no_port_at_all(self, config_dir: Path) -> None:
+        """A by-id path carries a serial number, and serial numbers are personal.
+
+        The reference rig's path is
+        ``usb-STMicroelectronics_STM32_Virtual_ComPort_<serial>-if00``. Shipping
+        one operator's serial number as the default means every other user gets
+        a path to a device that does not exist. Omitted means "ask the driver",
+        which is right for everyone.
+        """
         mount = load_equipment_config(config_dir / "equipment.yaml").mount
-        assert mount.port is not None
-        assert mount.port.startswith("/dev/serial/by-id/")
-        assert "STM32_Virtual_ComPort" in mount.port
+        assert mount.port is None
+
+    def test_the_shipped_config_carries_nobody_s_serial_number(self, config_dir: Path) -> None:
+        """Checked on the file, not the model: a comment would leak it too."""
+        text = (config_dir / "equipment.yaml").read_text(encoding="utf-8")
+        assert "8F8B50B10E31" not in text
 
     def test_the_shipped_default_is_not_ttyusb(self, config_dir: Path) -> None:
         """The regression this class exists for."""

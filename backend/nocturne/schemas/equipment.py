@@ -277,12 +277,28 @@ class Mount(StrictModel):
     """Mount — SPEC section 5.1. The M1 HITL subject."""
 
     indi_driver: str = Field(min_length=1)
+    #: The name the driver announces itself under, which is the driver's name
+    #: for the device and not the operator's: indi_eqmod says "EQMod Mount"
+    #: whatever is bolted to the tripod. It is equipment-dependent, so it is
+    #: configuration and not a constant (CLAUDE.md section 6). Read it off the
+    #: running driver with `indi_getprop | cut -d. -f1 | sort -u`.
+    indi_device_name: str = Field(min_length=1)
+    #: What the operator calls it. Display only, and translatable; never used
+    #: to address the device.
     device_label: str = Field(min_length=1)
     connection: MountConnection
     port: str | None = None
     baud: PositiveInt
     slew_rate_max_deg_s: PositiveFloat
     counterweight_fitted: bool
+
+    @field_validator("indi_device_name", "device_label")
+    @classmethod
+    def _names_are_not_whitespace(cls, value: str) -> str:
+        """``min_length`` counts spaces; a name of spaces addresses nothing."""
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
 
     @field_validator("port")
     @classmethod

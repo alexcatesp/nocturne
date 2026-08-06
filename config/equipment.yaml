@@ -99,14 +99,31 @@ guiding:
 
 mount:
   indi_driver: "indi_eqmod_telescope"
-  device_label: "Wave 150i"
+  # The name the driver announces itself under. This is the driver's name for
+  # the device, not yours: indi_eqmod says "EQMod Mount" whatever mount is on
+  # the tripod. Nocturne addresses the device by this string, so it must match
+  # exactly. Read it off a running driver with:
+  #   indi_getprop | cut -d. -f1 | sort -u
+  indi_device_name: "EQMod Mount"
+  device_label: "Wave 150i"      # yours, for display; translatable
   connection: "serial"           # USB serial preferred over WiFi
-  # The Wave 150i is an STM32 virtual COM port (CDC-ACM), so it enumerates as
-  # /dev/ttyACM0 — NOT ttyUSB0, and there is no FTDI/CH340/CP210x bridge chip.
-  # Always use the by-id path: ttyACM0 moves if another USB serial device is
-  # attached. `ls -l /dev/serial/by-id/` gives yours. Measured on the reference
-  # rig; see docs/FIELD-NOTES-M1.md §2.1.
-  port: "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_8F8B50B10E31-if00"
+  # Left unset on purpose. indi_eqmod finds the mount and fills DEVICE_PORT
+  # itself, correctly, with the stable by-id path (docs/FIELD-NOTES-M1.md §2.3),
+  # and a by-id path contains the mount's own serial number — one that is right
+  # for one rig is a dead path on every other.
+  #
+  # Set it only to override the driver's choice, for instance if two mounts are
+  # attached. `ls -l /dev/serial/by-id/` gives yours; it looks like
+  #   /dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_<serial>-if00
+  # Use the by-id path and not /dev/ttyACM0: ttyACM0 is handed out in plug
+  # order and moves when another USB serial device appears. The Wave 150i is an
+  # STM32 virtual COM port (CDC-ACM), so it is ttyACM and never ttyUSB — there
+  # is no FTDI/CH340/CP210x bridge chip in it.
+  #
+  # If you set this and the device is not present, Nocturne refuses to start
+  # rather than falling back to auto-detection, which would hide a cable moved
+  # to the wrong socket.
+  port: null
   # The driver starts at 9600 and must be told this before CONNECT.
   baud: 115200
   slew_rate_max_deg_s: 3.0       # deliberately below the mount's 7.5; portable setup

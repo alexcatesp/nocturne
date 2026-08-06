@@ -79,6 +79,36 @@ class TestCheckConfig:
         assert main(["check-config", "--config-dir", str(config_dir)]) == 0
         assert "could not be inspected" in capsys.readouterr().out
 
+    def test_report_names_the_mount_port_and_whether_it_is_there(
+        self, config_dir: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        main(["check-config", "--config-dir", str(config_dir)])
+        out = capsys.readouterr().out
+        assert "Mount port:" in out
+        assert "driver" in out  # the shipped config sets none
+
+    def test_a_configured_port_that_is_absent_fails_the_check(
+        self, tmp_path: Path, config_dir: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A cable in the wrong socket must not read as a healthy startup."""
+        for name in ("equipment.yaml", "safety.yaml", "agent.yaml"):
+            (tmp_path / name).write_text(
+                (config_dir / name).read_text(encoding="utf-8"), encoding="utf-8"
+            )
+        equipment = (tmp_path / "equipment.yaml").read_text(encoding="utf-8")
+        (tmp_path / "equipment.yaml").write_text(
+            equipment.replace("  port: null", '  port: "/dev/ttyACM47"'), encoding="utf-8"
+        )
+
+        assert main(["check-config", "--config-dir", str(tmp_path)]) != 0
+        err = capsys.readouterr().err
+        assert "/dev/ttyACM47" in err
+        assert "dialout" in err
+
+    def test_an_unset_port_never_fails_the_check(self, config_dir: Path) -> None:
+        """Nothing was claimed, so nothing can be missing."""
+        assert main(["check-config", "--config-dir", str(config_dir)]) == 0
+
     def test_invalid_config_exits_non_zero_and_explains(
         self, tmp_path: Path, config_dir: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:

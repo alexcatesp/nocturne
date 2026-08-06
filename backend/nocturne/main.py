@@ -14,6 +14,11 @@ import argparse
 import sys
 from pathlib import Path
 
+from nocturne.devices import (
+    MissingSerialDeviceError,
+    describe_configured_port,
+    require_configured_port,
+)
 from nocturne.schemas import ConfigError, NocturneConfig, load_config_bundle
 from nocturne.storage import describe_storage, inspect_storage
 
@@ -59,8 +64,9 @@ def _format_report(config: NocturneConfig) -> str:
             f"  Guiding:       {equipment.guiding.mode} "
             f"({equipment.guiding.camera.name}) — {guide_scale:.2f} arcsec/px",
             f"  Mount:         {equipment.mount.device_label} via "
-            f"{equipment.mount.indi_driver} over {equipment.mount.connection} "
-            f"({equipment.mount.port or 'n/a'})",
+            f"{equipment.mount.indi_driver} over {equipment.mount.connection}, "
+            f"announced as {equipment.mount.indi_device_name!r}",
+            f"  Mount port:    {describe_configured_port(equipment.mount.port)}",
             "  Filters:       "
             + ", ".join(
                 f"{position}:{slot.name}"
@@ -103,6 +109,16 @@ def _check_config(config_dir: Path) -> int:
         print(f"Nocturne configuration is INVALID.\n{exc}", file=sys.stderr)
         return 1
     print(_format_report(config))
+
+    # After the report, not before: the operator sees what is configured even
+    # when the device is missing, which is most of what they need to diagnose it.
+    try:
+        require_configured_port(
+            config.equipment.mount.port, label=config.equipment.mount.device_label
+        )
+    except MissingSerialDeviceError as exc:
+        print(f"\nNocturne cannot start.\n{exc}", file=sys.stderr)
+        return 1
     return 0
 
 
