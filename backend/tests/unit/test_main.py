@@ -14,7 +14,7 @@ class TestCheckConfig:
         self, config_dir: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         assert main(["check-config", "--config-dir", str(config_dir)]) == 0
-        assert "Tudela de Duero" in capsys.readouterr().out
+        assert "Site:" in capsys.readouterr().out
 
     def test_report_states_that_the_mount_is_uncalibrated(
         self, config_dir: Path, capsys: pytest.CaptureFixture[str]
@@ -78,6 +78,37 @@ class TestCheckConfig:
         monkeypatch.setattr(main_module, "inspect_storage", explode)
         assert main(["check-config", "--config-dir", str(config_dir)]) == 0
         assert "could not be inspected" in capsys.readouterr().out
+
+    def test_the_placeholder_site_is_called_out_loudly(
+        self, config_dir: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The shipped config has one. Nothing about it fails on its own."""
+        assert main(["check-config", "--config-dir", str(config_dir)]) == 0
+        out = capsys.readouterr().out
+        assert "STILL THE SHIPPED PLACEHOLDER" in out
+        # It must say what goes wrong, not just that something is unset.
+        assert "meridian" in out.lower()
+        assert "equipment.yaml" in out
+
+    def test_a_real_site_produces_no_placeholder_warning(
+        self, tmp_path: Path, config_dir: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        for name in ("equipment.yaml", "safety.yaml", "agent.yaml"):
+            (tmp_path / name).write_text(
+                (config_dir / name).read_text(encoding="utf-8"), encoding="utf-8"
+            )
+        equipment = (tmp_path / "equipment.yaml").read_text(encoding="utf-8")
+        (tmp_path / "equipment.yaml").write_text(
+            equipment.replace("latitude: 45.0", "latitude: 51.4778").replace(
+                "longitude: 0.0", "longitude: -0.0015"
+            ),
+            encoding="utf-8",
+        )
+
+        assert main(["check-config", "--config-dir", str(tmp_path)]) == 0
+        out = capsys.readouterr().out
+        assert "STILL THE SHIPPED PLACEHOLDER" not in out
+        assert "51.4778" in out
 
     def test_report_names_the_mount_port_and_whether_it_is_there(
         self, config_dir: Path, capsys: pytest.CaptureFixture[str]

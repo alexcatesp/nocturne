@@ -15,6 +15,12 @@ import pytest
 from pydantic import ValidationError
 
 from nocturne.schemas import EquipmentConfig, load_equipment_config
+from nocturne.schemas.equipment import (
+    PLACEHOLDER_ELEVATION_M,
+    PLACEHOLDER_LATITUDE,
+    PLACEHOLDER_LONGITUDE,
+    Site,
+)
 
 
 @pytest.fixture
@@ -33,13 +39,25 @@ class TestShippedFile:
         config = load_equipment_config(config_dir / "equipment.yaml")
         assert isinstance(config, EquipmentConfig)
 
-    def test_site_matches_spec_section_2_2(self, config_dir: Path) -> None:
+    def test_the_shipped_site_is_the_generic_placeholder(self, config_dir: Path) -> None:
+        """SPEC section 2.3 names the town in prose. Coordinates are not shipped.
+
+        A residential site's latitude and longitude to four decimal places is
+        somebody's home address to within metres, published next to a
+        description of expensive equipment left outside at night and a schedule
+        of when nobody is watching it.
+        """
         site = load_equipment_config(config_dir / "equipment.yaml").site
-        assert site.name == "Tudela de Duero"
-        assert site.latitude == pytest.approx(41.5806)
-        assert site.longitude == pytest.approx(-4.5814)
-        assert site.elevation_m == 700
-        assert site.timezone == "Europe/Madrid"
+        assert site.latitude == pytest.approx(PLACEHOLDER_LATITUDE)
+        assert site.longitude == pytest.approx(PLACEHOLDER_LONGITUDE)
+        assert site.elevation_m == pytest.approx(PLACEHOLDER_ELEVATION_M)
+        assert site.is_placeholder
+
+    def test_no_real_site_coordinates_are_shipped(self, config_dir: Path) -> None:
+        """The regression this class exists for. Checked on the file, not the model."""
+        text = (config_dir / "equipment.yaml").read_text(encoding="utf-8")
+        for leaked in ("41.58", "-4.58", "4.5814"):
+            assert leaked not in text, f"{leaked} is a real observing site"
 
     def test_imaging_camera_matches_asi533mm_pro(self, config_dir: Path) -> None:
         camera = load_equipment_config(config_dir / "equipment.yaml").imaging_camera
@@ -261,6 +279,61 @@ class TestCrossFieldConsistency:
         raw["focuser"]["temperature_compensation"]["enabled"] = True
         with pytest.raises(ValidationError, match="coefficient_steps_per_c"):
             EquipmentConfig.model_validate(raw)
+
+
+class TestThePlaceholderSiteIsDetectable:
+    """Wrong coordinates fail quietly and expensively.
+
+    Ephemeris, altitude windows and meridian timing are all derived from the
+    site. A placeholder left in place does not raise; it just points the
+    telescope at the wrong part of the sky all night, and at the wrong times.
+    """
+
+    def site(self, **overrides: object) -> Site:
+        fields: dict[str, Any] = {
+            "name": "Placeholder — REPLACE THIS",
+            "latitude": PLACEHOLDER_LATITUDE,
+            "longitude": PLACEHOLDER_LONGITUDE,
+            "elevation_m": PLACEHOLDER_ELEVATION_M,
+            "timezone": "UTC",
+        }
+        fields.update(overrides)
+        return Site.model_validate(fields)
+
+    def test_the_shipped_values_are_recognised(self) -> None:
+        assert self.site().is_placeholder
+
+    def test_a_real_site_is_not(self) -> None:
+        assert not self.site(latitude=51.4778, longitude=-0.0015).is_placeholder
+
+    def test_changing_only_the_name_does_not_clear_it(self) -> None:
+        """Coordinates are what break the ephemeris, not the label."""
+        assert self.site(name="My terrace").is_placeholder
+
+    def test_changing_either_coordinate_clears_it(self) -> None:
+        """Either one alone. A half-edited file is still not this location."""
+        assert not self.site(latitude=41.5).is_placeholder
+        assert not self.site(longitude=-4.5).is_placeholder
+
+    def test_any_coordinate_a_person_typed_clears_it(self) -> None:
+        """The question is "has this been edited?", not "is this near 45N 0E?".
+
+        So the tolerance is about 10 cm. Someone genuinely observing from
+        45.0000 N, 0.0000 E — and the point is in open country, so nobody is —
+        moves a metre and is never asked again.
+        """
+        for delta in (0.0001, 0.001, 0.01, 1.0):
+            assert not self.site(latitude=PLACEHOLDER_LATITUDE + delta).is_placeholder
+            assert not self.site(longitude=PLACEHOLDER_LONGITUDE - delta).is_placeholder
+
+    def test_the_same_value_written_differently_still_matches(self) -> None:
+        """45, 45.0 and 45.000 are the same statement: the file is unedited."""
+        assert self.site(latitude=45, longitude=-0.0).is_placeholder
+
+    def test_the_shipped_configuration_reports_itself_as_a_placeholder(
+        self, config_dir: Path
+    ) -> None:
+        assert load_equipment_config(config_dir / "equipment.yaml").site.is_placeholder
 
 
 class TestTheIndiDeviceNameIsConfiguration:

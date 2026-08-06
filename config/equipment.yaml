@@ -4,12 +4,24 @@
 # operator's migration from guide scope to OAG, and the addition of a coma
 # corrector, are changes to this file only.
 
+# =============================================================================
+# REPLACE THIS BEFORE THE FIRST SESSION.
+#
+# These coordinates are a placeholder, not a site. Nocturne warns at every
+# startup while they are still here, because nothing about wrong coordinates
+# fails loudly: the ephemeris, the altitude windows and the meridian timing are
+# all derived from them, so a placeholder simply points the telescope at the
+# wrong part of the sky, at the wrong times, all night.
+#
+# Get yours to four decimal places from a map, standing where the mount stands.
+# The repository ships nobody's real address on purpose — yours is your own.
+# =============================================================================
 site:
-  name: "Tudela de Duero"
-  latitude: 41.5806
-  longitude: -4.5814
-  elevation_m: 700
-  timezone: "Europe/Madrid"
+  name: "PLACEHOLDER — replace with your site"
+  latitude: 45.0                 # degrees north, negative for south
+  longitude: 0.0                 # degrees east, negative for west
+  elevation_m: 100
+  timezone: "UTC"                # IANA name, e.g. "Europe/Madrid"
 
 optical_trains:
   - id: "native"

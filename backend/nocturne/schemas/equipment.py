@@ -40,6 +40,29 @@ MountConnection = Literal["serial", "wifi"]
 _STABLE_PORT_PREFIXES: Final = ("/dev/serial/by-id/", "/dev/serial/by-path/")
 _BARE_PORT_PATTERN: Final = re.compile(r"^/dev/tty(ACM|USB)\d+$")
 
+#: The site shipped in ``config/equipment.yaml``. Deliberately generic.
+#:
+#: A residential observing site's coordinates to four decimal places are
+#: somebody's home address to within metres. Published in a repository next to
+#: an inventory of expensive equipment left outside overnight and a schedule of
+#: when nobody is watching it, that is not a detail — so the reference
+#: configuration ships a round-numbered mid-latitude point that belongs to
+#: nobody, and the operator replaces it before the first session.
+#:
+#: 45.0 N, 0.0 E is in open country in south-west France. It is a real place
+#: only in the sense that every point is; nothing observes from it.
+PLACEHOLDER_LATITUDE: Final = 45.0
+PLACEHOLDER_LONGITUDE: Final = 0.0
+PLACEHOLDER_ELEVATION_M: Final = 100.0
+
+#: How close counts as "still the placeholder", in degrees.
+#:
+#: This asks "has the file been edited?", not "is this site near 45N 0E?", so
+#: the tolerance is tiny: 1e-6 degrees is about 10 cm. Any coordinate a person
+#: typed clears it. It is not exact equality only so that 45, 45.0 and 45.000
+#: cannot be told apart by a rounding artefact.
+PLACEHOLDER_TOLERANCE_DEG: Final = 1e-6
+
 PositiveFloat = Annotated[float, Field(gt=0)]
 PositiveInt = Annotated[int, Field(gt=0)]
 NonNegativeInt = Annotated[int, Field(ge=0)]
@@ -53,6 +76,19 @@ class Site(StrictModel):
     longitude: float = Field(ge=-180.0, le=180.0)
     elevation_m: float = Field(ge=-500.0, le=9000.0)
     timezone: str = Field(min_length=1)
+
+    @property
+    def is_placeholder(self) -> bool:
+        """Whether the coordinates are still the ones the repository ships.
+
+        Coordinates only, not the name: a wrong label is cosmetic, wrong
+        coordinates silently produce the wrong ephemeris, the wrong altitude
+        windows and the wrong meridian timing all night.
+        """
+        return (
+            abs(self.latitude - PLACEHOLDER_LATITUDE) < PLACEHOLDER_TOLERANCE_DEG
+            and abs(self.longitude - PLACEHOLDER_LONGITUDE) < PLACEHOLDER_TOLERANCE_DEG
+        )
 
     @field_validator("timezone")
     @classmethod

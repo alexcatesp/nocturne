@@ -26,7 +26,7 @@ class TestBundle:
     def test_bundle_loads_all_three_files(self, config_dir: Path) -> None:
         config = load_config_bundle(config_dir)
         assert isinstance(config, NocturneConfig)
-        assert config.equipment.site.name == "Tudela de Duero"
+        assert config.equipment.site.is_placeholder  # the shipped reference site
         assert config.safety.limits.meridian.calibrated is False
         assert config.agent.autonomy_level == "advisory"
 

@@ -96,9 +96,14 @@ configuration values, never constants. See `equipment.yaml` in §5.
 ### 2.3 Observing site
 
 Fixed site, portable setup: residential terrace, Tudela de Duero, Valladolid, Spain.
-Approx. 41.58° N, 4.58° W, ~700 m elevation. Bortle ~5–6. Restricted horizon (buildings,
-walls). The mount is set up and torn down per session; polar alignment is performed each
-night.
+Roughly 42° N, 700 m elevation. Bortle ~5–6. Restricted horizon (buildings, walls). The
+mount is set up and torn down per session; polar alignment is performed each night.
+
+**Precise coordinates are deliberately not in this repository.** A residential site to
+four decimal places is a home address to within metres, and this document sits beside an
+inventory of equipment left outside overnight and a schedule of when nobody is watching
+it. `equipment.yaml` ships a generic placeholder; the operator supplies the real values
+locally and Nocturne warns at every startup until they do.
 
 **Critical constraint:** no tripod extension is fitted. The OTA will physically collide
 with the tripod legs near the meridian. This is a hard safety concern, not a preference.
@@ -187,11 +192,15 @@ startup. **No magic numbers in code.** Startup fails loudly on invalid config.
 
 ```yaml
 site:
-  name: "Tudela de Duero"
-  latitude: 41.5806
-  longitude: -4.5814
-  elevation_m: 700
-  timezone: "Europe/Madrid"
+  # PLACEHOLDER. Replace before the first session — see §2.3. Nocturne warns at
+  # every startup while these are still the shipped values, because nothing
+  # about wrong coordinates fails loudly: ephemeris, altitude windows and
+  # meridian timing are all derived from them.
+  name: "PLACEHOLDER — replace with your site"
+  latitude: 45.0
+  longitude: 0.0
+  elevation_m: 100
+  timezone: "UTC"
 
 optical_trains:
   - id: "native"

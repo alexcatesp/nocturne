@@ -20,6 +20,7 @@ from nocturne.devices import (
     require_configured_port,
 )
 from nocturne.schemas import ConfigError, NocturneConfig, load_config_bundle
+from nocturne.schemas.equipment import Site
 from nocturne.storage import describe_storage, inspect_storage
 
 DEFAULT_CONFIG_DIR = Path("config")
@@ -54,6 +55,7 @@ def _format_report(config: NocturneConfig) -> str:
         [
             "Nocturne configuration OK.",
             "",
+            *_site_lines(equipment.site),
             f"  Site:          {equipment.site.name} "
             f"({equipment.site.latitude:+.4f}, {equipment.site.longitude:+.4f}, "
             f"{equipment.site.elevation_m:.0f} m, {equipment.site.timezone})",
@@ -79,6 +81,27 @@ def _format_report(config: NocturneConfig) -> str:
             meridian_line,
         ]
     )
+
+
+def _site_lines(site: Site) -> list[str]:
+    """A banner above the report while the site is still the shipped one.
+
+    Above, not below: it is the first thing that has to be fixed and the last
+    thing anyone scrolls to. Nothing about wrong coordinates fails on its own —
+    the run simply produces the wrong sky at the wrong times — so this is the
+    only place it gets said.
+    """
+    if not site.is_placeholder:
+        return []
+    return [
+        "  !! THE SITE COORDINATES ARE STILL THE SHIPPED PLACEHOLDER.",
+        "     Replace site.latitude and site.longitude in config/equipment.yaml",
+        "     with your own, to four decimal places, before observing.",
+        "     Until you do, sunrise and sunset, target altitudes and the",
+        "     meridian crossing times are all computed for somewhere else, and",
+        "     nothing will report an error — the frames will simply be wrong.",
+        "",
+    ]
 
 
 def _storage_lines() -> list[str]:
