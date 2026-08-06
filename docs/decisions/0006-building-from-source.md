@@ -1,6 +1,9 @@
 # 0006 — Building INDI, StellarSolver and KStars from source
 
 Status: Accepted · 2026-08-05 · Milestone M1
+Revised 2026-08-06: the distribution versions below were unverified when this
+was written. They have now been measured on the reference rig running Trixie
+(docs/FIELD-NOTES-M1.md section 5.1), and the guesses are replaced by figures.
 
 ## Context
 
@@ -13,24 +16,42 @@ What the distributions actually ship:
 | Source | INDI version | Verdict |
 |---|---|---|
 | Raspberry Pi OS Bookworm (Debian 12) | 1.9.x | Too old, and superseded as a target by ADR 0008 |
-| Raspberry Pi OS Trixie (Debian 13) | 2.0.x–2.1.x at freeze | **Unverified from the development environment** — see below |
+| Raspberry Pi OS Trixie (Debian 13) | **1.9.9+dfsg-3+b5** | Measured. Too old |
 | Ubuntu 24.04 universe | 1.9.9 | Too old |
 | indilib PPA (`ppa:mutlaqja/ppa`) | 2.x | Ubuntu only; Raspberry Pi OS is Debian, and PPAs do not apply to it |
 | Astroberry repository | 1.9.x era | Discontinued |
 
-**Confirm this on the Pi before assuming the source build is needed.** Trixie is
-newer than Bookworm and its INDI may be closer to the floor. The one-line check
-is `apt-cache policy libindi-dev`; if it reports 2.2.3 or later, the INDI and
-indi-3rdparty source builds can be dropped in favour of packages, which removes
-most of the build time. The development environment for this repository could
-not reach Debian's package data, so this is stated as a check to perform, not a
-fact established.
+### Measured on Trixie, 2026-08
 
-At the time of writing there is no packaged INDI >= 2.2.3 known for Raspberry Pi
-OS. The ZWO drivers
-(`indi-asi`) come from `indi-3rdparty` and must link the same INDI. KStars must
-be built against that INDI, and StellarSolver is not packaged for Raspberry Pi
-OS at all.
+The hope recorded in the first version of this ADR — that Trixie, being newer
+than Bookworm, might ship an INDI close enough to the 2.2.3 floor to drop most
+of the source build — **did not survive contact with the machine.** What Trixie
+actually has:
+
+```
+libindi-dev / indi-bin     1.9.9+dfsg-3+b5      (need >= 2.2.3)
+kstars                     5:3.6.2-2+b5         (need >= 3.8.2 for Optical Trains)
+libstellarsolver-dev       2.6-1+b1             (need 2.8)
+```
+
+Not one of the three is usable. Everything is built from source, and the
+`apt-cache policy libindi-dev` check that this ADR previously asked the operator
+to run has been performed: the answer is 1.9.9.
+
+There is no apt repository for INDI on Debian ARM at all. The indilib PPA is
+Ubuntu-only and adding it to Debian breaks the system, which is worth stating
+plainly because it is the obvious thing to try.
+
+**Debian's `indi-bin` is worse than merely old here.** 1.9.9 predates Wave 150i
+support in `indi-eqmod`, so a bench test run against it would fail for reasons
+that have nothing to do with the cable — and could have sent the project down
+the WiFi fallback route for no reason (ADR 0011). `scripts/install.sh` therefore
+refuses to run while `libindi-dev` or `indi-bin` is installed, rather than
+offering the packaged INDI as a shortcut, and its error text says why.
+
+The ZWO drivers (`indi-asi`) come from `indi-3rdparty` and must link the same
+INDI. KStars must be built against that INDI, and StellarSolver is not packaged
+at a usable version either.
 
 The cost is real: one to three hours on a Pi 5, most of it KStars.
 
@@ -109,6 +130,12 @@ Every build appends the component, the tag and the **resolved commit** to
 what this machine is actually running, and it is what to compare when two
 installs disagree.
 
+**The pinning mechanism has now been verified end to end.** On the reference
+rig, the `indi-3rdparty` v2.2.4 tag resolved to commit
+`64fbe2e2dcded132e107d764d4965e034b810a3f` — exactly the SHA recorded in
+`versions.lock` (field notes section 5.5). A tag that had been moved upstream
+would have produced a different SHA and the mismatch would have been visible.
+
 `--allow-unpinned` exists for deliberately testing an upstream branch. It warns
 loudly and records the branch name in the lock file.
 
@@ -121,10 +148,15 @@ loudly and records the branch name in the lock file.
 - **KStars will not build until its tag is supplied.** That is deliberate: a
   wrong release here is not cosmetic. `--skip-kstars` installs INDI and Nocturne
   now and leaves KStars for later.
-- **The installer has never been run end to end.** No aarch64 Raspberry Pi was
-  available, and the environment it was written in could not reach the
-  package sources. Its syntax, option handling, pinning guard and `--check`
-  path are tested; the compilation stages are not.
+- **The installer has still never been run end to end.** The stages were
+  performed by hand on the reference rig, following `docs/installation.md`, and
+  everything that went wrong in the process is now folded back into the script
+  (ADR 0009, and field notes section 5). That is not the same as the script
+  having run: its syntax, option handling, pinning guard, `-Werror` patch and
+  `--check` path are tested, the compilation stages are not.
+- The measured versions above close the "check this on the Pi" action this ADR
+  opened. Nothing in Trixie can be used, so the full source build is not a
+  precaution — it is the only route.
 - Should the build burden become tiresome, option 4 — building a `.deb` once —
   is the way out, and `versions.lock` already names exactly what would go into
   it.

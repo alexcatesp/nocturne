@@ -69,6 +69,13 @@ readonly INDEX_DIR_DEFAULT="/usr/share/astrometry"
 # Highest healpix suffix a split index series uses.
 readonly INDEX_MAX_HEALPIX=47
 
+# /usr, not /usr/local. KStars, the INDI drivers and pkg-config all have to
+# agree on one prefix, and Debian's own packages live in /usr; installing the
+# source build beside them under /usr/local produces two libindi on the same
+# machine with the older one first on the search path. This is the prefix the
+# reference rig was built with (docs/installation.md section 6).
+readonly INSTALL_PREFIX="${NOCTURNE_INSTALL_PREFIX:-/usr}"
+
 readonly BUILD_DIR_DEFAULT="${HOME}/.cache/nocturne-build"
 readonly REQUIRED_ARCH="aarch64"
 
@@ -237,14 +244,102 @@ cmake_build_install() {
     local source_dir="$1" build_subdir="$2"
     shift 2
     local build_dir="${BUILD_DIR}/${build_subdir}"
-    mkdir -p "${build_dir}"
+    # Delete rather than reuse. CMake's cache keeps the flags from the previous
+    # configure, and reconfiguring over it does not reliably clear them, so a
+    # build directory left over from before the -Werror patch below would still
+    # fail with -Werror. This cost a full build cycle to discover; see
+    # docs/decisions/0009-werror-and-trixie-gcc.md.
+    rm -rf "${build_dir}"
     cmake -S "${source_dir}" -B "${build_dir}" \
-        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" \
         -DCMAKE_BUILD_TYPE=Release \
         "$@"
-    cmake --build "${build_dir}" -j "${JOBS}"
-    as_root cmake --install "${build_dir}"
+    # Chained on purpose. Run as two statements, a failed build is followed by
+    # an install that reports a missing binary, and that error names the install
+    # step while hiding the real failure.
+    cmake --build "${build_dir}" -j "${JOBS}" && as_root cmake --install "${build_dir}"
     as_root ldconfig
+    # The build tree is the biggest thing on the disk and the rig has 32 GB.
+    rm -rf "${build_dir}"
+}
+
+# --------------------------------------------------------------------------
+# -Werror
+# --------------------------------------------------------------------------
+#
+# INDI v2.2.4 predates the GCC in Trixie, and the newer compiler emits warnings
+# the project treats as fatal — indi_astrotrac_telescope dies on
+# -Werror=stringop-overread, killing the whole build at 32% for a driver we do
+# not own. -DCMAKE_CXX_FLAGS="-Wno-error" does not help: the project appends
+# -Werror after user flags, so its setting wins. The flag has to come out at
+# source. See docs/decisions/0009-werror-and-trixie-gcc.md.
+strip_werror() {
+    local source_dir="$1" expected="$2"
+    local file="${source_dir}/cmake_modules/CMakeCommon.cmake"
+    [[ -f ${file} ]] || fail "${file} does not exist. The upstream layout has changed;
+    re-check where -Werror is set before building, rather than building without
+    knowing whether it is still forced."
+
+    # Only lines that ADD the flag to the build. check_c_compiler_flag(...) lines
+    # in the same file are capability probes: patching one changes what the build
+    # detects, not what it enforces, and it must be left exactly as it is.
+    local -a targets=()
+    while IFS=: read -r line _; do targets+=("${line}"); done < <(
+        grep -n -i -E '^[[:space:]]*set\(COMP_FLAGS.*-Werror' "${file}" || true
+    )
+
+    if (( ${#targets[@]} != expected )); then
+        fail "expected ${expected} forced -Werror line(s) in
+    ${file}
+    but found ${#targets[@]}. This installer was written against ${INDI_VERSION};
+    at a different tag the flag may be set somewhere else entirely. Check with:
+        grep -n -i 'Werror' '${file}'
+    and update strip_werror() before building. Nothing has been built."
+    fi
+
+    local line
+    for line in "${targets[@]}"; do
+        sed -i "${line}s/ -Werror[A-Za-z=-]*//g" "${file}"
+    done
+
+    if grep -q -i -E '^[[:space:]]*set\(COMP_FLAGS.*-Werror' "${file}"; then
+        fail "-Werror is still forced in ${file} after patching it. Nothing has been built."
+    fi
+    info "removed ${expected} forced -Werror flag(s) from $(basename "${source_dir}")"
+}
+
+# Debian ships libindi 1.9.9. It is not merely old: it predates Wave 150i
+# support in indi-eqmod, so a bench test run against it fails for reasons that
+# have nothing to do with the cable — and could wrongly send the project down
+# the WiFi fallback route. It also shadows the source build: pkg-config finds
+# the packaged headers first and the drivers link the wrong library.
+#
+# There is no shortcut available here. The INDI PPA is Ubuntu-only, and adding
+# it to Debian breaks the system; there is no INDI apt repository for Debian on
+# ARM. Compiling is the only route, which is why this installer takes an hour.
+refuse_packaged_indi() {
+    local -a packaged=()
+    local package
+    for package in libindi-dev indi-bin; do
+        if dpkg-query -W -f='${Status}' "${package}" 2>/dev/null | grep -q "install ok installed"; then
+            packaged+=("${package}")
+        fi
+    done
+    (( ${#packaged[@]} == 0 )) && return 0
+
+    fail "Debian's INDI packages are installed: ${packaged[*]}
+
+    Trixie ships libindi 1.9.9, which predates Wave 150i support in indi-eqmod.
+    Left in place it also shadows the build this installer is about to make:
+    pkg-config would find the packaged headers first and the drivers would link
+    the wrong library.
+
+    Remove them and run this again:
+        sudo apt remove ${packaged[*]}
+
+    There is no packaged alternative. The INDI PPA is Ubuntu-only and adding it
+    to Debian breaks the system, so building from source is the only route.
+    Nothing has been built."
 }
 
 # --------------------------------------------------------------------------
@@ -423,7 +518,9 @@ build_indi() {
     fi
     [[ -n ${existing} ]] && info "found INDI ${existing}, which is below ${INDI_MINIMUM}"
 
+    refuse_packaged_indi
     fetch_source "${INDI_REPO}" "${INDI_VERSION}" "${BUILD_DIR}/indi"
+    strip_werror "${BUILD_DIR}/indi" 1
     cmake_build_install "${BUILD_DIR}/indi" "indi-build"
 
     existing="$(installed_indi_version)"
@@ -433,15 +530,25 @@ build_indi() {
 }
 
 build_indi_3rdparty() {
-    step "Building the ZWO drivers (indi-3rdparty)"
+    step "Building the ZWO and EQMod drivers (indi-3rdparty)"
     fetch_source "${INDI_3RDPARTY_REPO}" "${INDI_VERSION}" "${BUILD_DIR}/indi-3rdparty"
+    strip_werror "${BUILD_DIR}/indi-3rdparty" 4
 
-    # The vendor libraries must be installed before the drivers that link them.
-    info "libraries first (ASI SDK)"
-    cmake_build_install "${BUILD_DIR}/indi-3rdparty" "indi-3rdparty-libs" -DBUILD_LIBS=1
+    # Three components out of the whole repository. Each subdirectory is a
+    # standalone CMake project. Building the lot is 204 MB of checkout and hours
+    # of compiling firmware for cameras nobody here owns, on a machine with
+    # 32 GB of storage and no swap.
+    #
+    # libasi FIRST, and with -DBUILD_LIBS=1: that is what installs the ZWO SDK
+    # headers, and without them indi-asi cannot compile.
+    info "the ZWO SDK (libasi)"
+    cmake_build_install "${BUILD_DIR}/indi-3rdparty/libasi" "3rdparty-libasi" -DBUILD_LIBS=1
 
-    info "then the drivers"
-    cmake_build_install "${BUILD_DIR}/indi-3rdparty" "indi-3rdparty-drivers"
+    info "the ZWO drivers (indi-asi)"
+    cmake_build_install "${BUILD_DIR}/indi-3rdparty/indi-asi" "3rdparty-indi-asi"
+
+    info "the mount driver (indi-eqmod)"
+    cmake_build_install "${BUILD_DIR}/indi-3rdparty/indi-eqmod" "3rdparty-indi-eqmod"
 
     local missing=()
     local driver
@@ -451,6 +558,14 @@ build_indi_3rdparty() {
     if (( ${#missing[@]} > 0 )); then
         fail "these drivers were not installed: ${missing[*]}
     They are named in config/equipment.yaml and Nocturne cannot reach the rig without them."
+    fi
+    # The whole point of building 2.2.4 rather than taking the packaged 1.9.9.
+    local eqmod_xml="${INSTALL_PREFIX}/share/indi/indi_eqmod.xml"
+    if [[ -f ${eqmod_xml} ]] && ! grep -q -i "Wave 150i" "${eqmod_xml}"; then
+        fail "the installed indi-eqmod does not list the Wave 150i:
+        ${eqmod_xml}
+    That means an older driver is installed, and a bench test against it would
+    fail for reasons unrelated to the cable."
     fi
     ok "indi_asi_ccd, indi_asi_focuser, indi_asi_wheel, indi_eqmod_telescope"
 }

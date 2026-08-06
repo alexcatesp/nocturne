@@ -14,6 +14,9 @@ listed in SPEC.md section 4.
 | [0003](0003-config-schema-location.md) | Where the Pydantic configuration models live | Accepted |
 | [0004](0004-closed-vocabularies.md) | Closed enumerations where the specification lists examples | Accepted |
 | [0005](0005-executor-transport-settings.md) | Executor transport timings without a fourth YAML file | Accepted |
-| [0006](0006-building-from-source.md) | Building INDI, StellarSolver and KStars from source, at pinned tags | Accepted |
+| [0006](0006-building-from-source.md) | Building INDI, StellarSolver and KStars from source, at pinned tags | Accepted, revised |
 | [0007](0007-m1-pointing-is-ungated.md) | M1 leaves pointing ungated, and how that is contained | Accepted (limitation) |
 | [0008](0008-raspberry-pi-os-trixie.md) | Raspberry Pi OS Trixie, not Bookworm — KStars 3.8.x is Qt6/KF6 | Accepted |
+| [0009](0009-werror-and-trixie-gcc.md) | INDI's forced `-Werror` is stripped before building on Trixie | Accepted |
+| [0010](0010-dual-meridian-enforcement.md) | Meridian limits enforced in the governor *and* in the driver | **Proposed — needs the operator's decision** |
+| [0011](0011-m1-mount-link-verified.md) | The Wave 150i runs on direct USB serial; the WiFi fallback is not taken | Accepted |
