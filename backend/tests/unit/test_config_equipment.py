@@ -65,7 +65,8 @@ class TestShippedFile:
         assert mount.indi_driver == "indi_eqmod_telescope"
         assert mount.device_label == "Wave 150i"
         assert mount.connection == "serial"
-        assert mount.port == "/dev/ttyUSB0"
+        assert mount.port is not None
+        assert mount.port.startswith("/dev/serial/by-id/")
         assert mount.baud == 115200
         assert mount.counterweight_fitted is False
 
@@ -258,3 +259,58 @@ class TestCrossFieldConsistency:
         raw["focuser"]["temperature_compensation"]["enabled"] = True
         with pytest.raises(ValidationError, match="coefficient_steps_per_c"):
             EquipmentConfig.model_validate(raw)
+
+
+class TestMountSerialPort:
+    """Field notes section 2.1 — the Wave 150i is CDC-ACM, not a USB-serial bridge.
+
+    It presents an STM32 virtual COM port and the kernel binds ``cdc_acm``, so it
+    appears at /dev/ttyACM0. There is no FTDI, CH340 or CP210x chip. The shipped
+    default pointed at /dev/ttyUSB0, which does not exist on this rig.
+    """
+
+    def test_the_shipped_default_is_the_stable_by_id_path(self, config_dir: Path) -> None:
+        mount = load_equipment_config(config_dir / "equipment.yaml").mount
+        assert mount.port is not None
+        assert mount.port.startswith("/dev/serial/by-id/")
+        assert "STM32_Virtual_ComPort" in mount.port
+
+    def test_the_shipped_default_is_not_ttyusb(self, config_dir: Path) -> None:
+        """The regression this class exists for."""
+        mount = load_equipment_config(config_dir / "equipment.yaml").mount
+        assert mount.port != "/dev/ttyUSB0"
+
+    @pytest.mark.parametrize(
+        "port",
+        [
+            "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_8F8B-if00",
+            "/dev/ttyACM0",
+            "/dev/ttyACM11",
+            "/dev/ttyUSB0",
+        ],
+    )
+    def test_accepted_serial_paths(self, raw: dict[str, Any], port: str) -> None:
+        raw["mount"]["port"] = port
+        assert EquipmentConfig.model_validate(raw).mount.port == port
+
+    @pytest.mark.parametrize(
+        "port",
+        ["ttyACM0", "COM3", "/home/pi/mount", "/dev/../etc/passwd", ""],
+    )
+    def test_rejected_serial_paths(self, raw: dict[str, Any], port: str) -> None:
+        raw["mount"]["port"] = port
+        with pytest.raises(ValidationError, match="port"):
+            EquipmentConfig.model_validate(raw)
+
+    def test_a_by_id_path_is_reported_as_stable(self, raw: dict[str, Any]) -> None:
+        raw["mount"]["port"] = "/dev/serial/by-id/usb-STMicroelectronics_STM32-if00"
+        assert EquipmentConfig.model_validate(raw).mount.uses_stable_port_path is True
+
+    def test_a_bare_device_node_is_reported_as_unstable(self, raw: dict[str, Any]) -> None:
+        """ttyACM0 moves when other USB serial hardware is attached."""
+        raw["mount"]["port"] = "/dev/ttyACM0"
+        assert EquipmentConfig.model_validate(raw).mount.uses_stable_port_path is False
+
+    def test_the_reference_baud_is_115200(self, config_dir: Path) -> None:
+        """The driver starts at 9600; the executor must set this before CONNECT."""
+        assert load_equipment_config(config_dir / "equipment.yaml").mount.baud == 115200

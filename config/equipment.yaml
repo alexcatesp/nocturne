@@ -101,7 +101,13 @@ mount:
   indi_driver: "indi_eqmod_telescope"
   device_label: "Wave 150i"
   connection: "serial"           # USB serial preferred over WiFi
-  port: "/dev/ttyUSB0"
+  # The Wave 150i is an STM32 virtual COM port (CDC-ACM), so it enumerates as
+  # /dev/ttyACM0 — NOT ttyUSB0, and there is no FTDI/CH340/CP210x bridge chip.
+  # Always use the by-id path: ttyACM0 moves if another USB serial device is
+  # attached. `ls -l /dev/serial/by-id/` gives yours. Measured on the reference
+  # rig; see docs/FIELD-NOTES-M1.md §2.1.
+  port: "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_8F8B50B10E31-if00"
+  # The driver starts at 9600 and must be told this before CONNECT.
   baud: 115200
   slew_rate_max_deg_s: 3.0       # deliberately below the mount's 7.5; portable setup
   counterweight_fitted: false

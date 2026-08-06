@@ -8,8 +8,9 @@ corrector, are changes to the YAML only (SPEC section 2.1, migration note).
 
 from __future__ import annotations
 
+import re
 import zoneinfo
-from typing import Annotated, Literal, Self
+from typing import Annotated, Final, Literal, Self
 
 from pydantic import Field, field_validator, model_validator
 
@@ -23,9 +24,21 @@ FilterType = Literal["dark", "luminance", "red", "green", "blue", "empty"]
 #: SPEC section 5.1: guide scale differs by an order of magnitude between these.
 GuidingMode = Literal["guidescope", "oag"]
 
-#: SPEC section 5.1: USB serial is preferred; WiFi is the documented fallback
-#: should the M1 HITL test of the Wave 150i fail (SPEC section 14, M1).
+#: SPEC section 5.1: USB serial is preferred. The WiFi fallback was the
+#: documented alternative had the M1 HITL test failed; it passed on 2026-08
+#: over direct USB serial, so WiFi is retained only as a contingency
+#: (docs/decisions/0011-m1-mount-link-verified.md).
 MountConnection = Literal["serial", "wifi"]
+
+#: Serial device paths the schema accepts.
+#:
+#: The Wave 150i presents an STM32 virtual COM port and the kernel binds
+#: ``cdc_acm``, so it enumerates as /dev/ttyACM0 — there is no FTDI, CH340 or
+#: CP210x bridge chip, and anything looking only for ttyUSB* will miss it
+#: entirely. Measured on the reference rig; see docs/FIELD-NOTES-M1.md section
+#: 2.1 and backend/tests/fixtures/hardware/wave150i-properties.txt.
+_STABLE_PORT_PREFIXES: Final = ("/dev/serial/by-id/", "/dev/serial/by-path/")
+_BARE_PORT_PATTERN: Final = re.compile(r"^/dev/tty(ACM|USB)\d+$")
 
 PositiveFloat = Annotated[float, Field(gt=0)]
 PositiveInt = Annotated[int, Field(gt=0)]
@@ -271,11 +284,45 @@ class Mount(StrictModel):
     slew_rate_max_deg_s: PositiveFloat
     counterweight_fitted: bool
 
-    @model_validator(mode="after")
-    def _serial_connection_requires_a_port(self) -> Self:
-        if self.connection == "serial" and not self.port:
-            raise ValueError("port is required when connection is 'serial'")
-        return self
+    @field_validator("port")
+    @classmethod
+    def _port_is_a_serial_device(cls, value: str | None) -> str | None:
+        """Accept a by-id path or a bare ACM/USB node, and nothing else."""
+        if value is None:
+            return None
+        if any(value.startswith(prefix) for prefix in _STABLE_PORT_PREFIXES):
+            bare = [prefix.rstrip("/") for prefix in _STABLE_PORT_PREFIXES]
+            if ".." in value or value.rstrip("/") in bare:
+                raise ValueError(f"{value!r} is not a complete /dev/serial path")
+            return value
+        if _BARE_PORT_PATTERN.match(value):
+            return value
+        raise ValueError(
+            f"{value!r} is not a serial device path. Expected a stable "
+            "/dev/serial/by-id/... path (preferred, and what the driver reports), "
+            "or /dev/ttyACM<n> or /dev/ttyUSB<n>. The Wave 150i is CDC-ACM and "
+            "appears as ttyACM, not ttyUSB."
+        )
+
+    @property
+    def uses_stable_port_path(self) -> bool:
+        """Whether the port survives a reboot or another USB device appearing.
+
+        ``/dev/ttyACM0`` is assigned in enumeration order. Plug in a second
+        USB-serial device and the mount can become ttyACM1, at which point the
+        configured path points at something else entirely.
+        """
+        return self.port is not None and any(
+            self.port.startswith(prefix) for prefix in _STABLE_PORT_PREFIXES
+        )
+
+    # There is deliberately no rule making ``port`` mandatory for a serial
+    # connection. indi_eqmod fills DEVICE_PORT.PORT with the correct by-id path
+    # unprompted, so a configured port is an override rather than the primary
+    # source (docs/FIELD-NOTES-M1.md section 2.3). Omitting the key means "use
+    # the port the driver reports"; the executor refuses to connect when
+    # neither the configuration nor the driver names one. A blank string is not
+    # that statement and is rejected by the field validator above.
 
 
 class EquipmentConfig(StrictModel):

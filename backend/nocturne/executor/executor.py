@@ -18,12 +18,12 @@ not gated; SPEC section 9 gates commands.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from types import TracebackType
 from typing import final
 
 from nocturne.executor.ekos import EkosBridge
-from nocturne.executor.indi.client import IndiClient
+from nocturne.executor.indi.client import EventHandler, IndiClient
 from nocturne.executor.indi.protocol import ElementValue, Property
 from nocturne.safety import (
     Approval,
@@ -121,6 +121,16 @@ class Executor:
     async def wait_for_device(self, device: str, *, timeout: float | None = None) -> None:
         """Wait until ``device`` exists."""
         await self._client.wait_for_device(device, timeout=timeout)
+
+    def subscribe(self, handler: EventHandler) -> Callable[[], None]:
+        """Watch transport events. Returns an unsubscribe callable.
+
+        Listening is a read: an event says what happened, and a subscriber that
+        wants to act on one comes back through the command methods above like
+        everyone else. The callable returned unsubscribes; it carries no other
+        capability.
+        """
+        return self._client.subscribe(handler)
 
     # -------------------------------------------------------------- commands
 
