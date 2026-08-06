@@ -148,10 +148,19 @@ Record the outcome as a new ADR either way.
 - Nocturne owns the correctness of its protocol handling, and has the tests to
   match. That is a standing cost, honestly incurred.
 - Framing is done explicitly rather than by relying on when expat surfaces an
-  end-element event. Expat defers those, and `XMLPullParser.flush()` does not
-  exist on the Python 3.11.2 that Raspberry Pi OS Bookworm ships, so a driver's
-  reply would otherwise sit in the buffer until unrelated traffic arrived — a
-  latency bug in a control path.
+  end-element event: expat defers those, so a driver's reply would otherwise sit
+  in the buffer until unrelated traffic arrived — a latency bug in a control
+  path.
+
+  **Correction (2026-08-05, with ADR 0008.)** This bullet originally justified
+  the explicit framing by saying `XMLPullParser.flush()` does not exist on the
+  Python 3.11.2 that Raspberry Pi OS Bookworm ships. The target is now Trixie,
+  which ships Python 3.13, where `flush()` does exist. **That specific argument
+  no longer applies and is withdrawn.** The framing stays for the reasons that
+  do not depend on the interpreter version: it is deterministic, it is
+  independent of expat's deferral behaviour changing between releases, and it is
+  covered by tests down to byte-at-a-time delivery. No code changed; only this
+  justification did.
 - BLOB transfer is parsed but never enabled: Nocturne reads FITS from disk, not
   over the wire (SPEC section 11.3). A test asserts the client never sends
   `enableBLOB`.

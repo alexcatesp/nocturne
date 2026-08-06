@@ -74,7 +74,10 @@ Any INDI-supported combination should work, but only the above is tested.
 
 - Raspberry Pi 5 (8 GB recommended) with **NVMe storage** — an SD card will not survive
   the stacking write load
-- Raspberry Pi OS 64-bit (Bookworm or later)
+- Raspberry Pi OS 64-bit, **Trixie (Debian 13) or later** — KStars 3.8.x is
+  Qt6/KF6, and Bookworm ships KF5 only. The installer refuses to start on an
+  older release rather than fail an hour into a compile
+  ([ADR 0008](docs/decisions/0008-raspberry-pi-os-trixie.md))
 - INDI ≥ 2.2.3, KStars/Ekos, Siril
 - An Anthropic API key (optional — the system runs autonomously on deterministic rules
   without it)

@@ -5,13 +5,19 @@ session bus as ``org.kde.kstars``. Nocturne drives it from here rather than
 reimplementing polar alignment, autofocus, guiding and meridian handling
 (SPEC section 3, rationale for Ekos as executor).
 
-**On method names.** The DBus surface of KStars is not part of any stable
-published contract, and it has moved between KStars releases. Rather than
-assume, the bridge *introspects* the remote objects when it connects and
-refuses to start if the methods it needs are not there, naming what it wanted
-and what it found. A wrong guess therefore becomes a loud, diagnosable startup
-failure rather than a call that silently does nothing at two in the morning.
-Correcting a name is a change to the constants at the top of this module.
+**On method names — THESE ARE UNVERIFIED.** Every path, interface and method
+name below was written from expectation, not read from a live KStars. The DBus
+surface is not a published stable contract and has moved between releases.
+
+The bridge introspects the remote objects when it connects and refuses to start
+if what it needs is absent, naming what it wanted and what it found. That is
+*containment*: a wrong name becomes a loud startup failure instead of a call
+that silently does nothing at two in the morning. **It is not verification.**
+
+Verifying them is https://github.com/alexcatesp/nocturne/issues/2, and it is the
+first executor task once KStars builds — which is blocked on Trixie (ADR 0008)
+and on the KStars tag (ADR 0006). The Optical Trains interface added in KStars
+3.8.2 is absent from this module entirely and is part of that work.
 
 **On what the bridge is for.** Generic property read/write against the drivers
 goes through :class:`~nocturne.executor.indi.client.IndiClient`; SPEC section 4

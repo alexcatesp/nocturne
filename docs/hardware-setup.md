@@ -22,6 +22,9 @@ fallback is WiFi and that changes the design.
 - Mount powered from its 12 V supply.
 - A USB cable from the mount to the Raspberry Pi.
 - The Pi powered, on the network, and you logged into it.
+- The Pi running **Raspberry Pi OS 64-bit Trixie (Debian 13) or later**. Check
+  with `cat /etc/os-release`. If it says `bookworm`, re-image first — the
+  installer will refuse, and it is right to (ADR 0008).
 
 **Not needed:** tripod, polar alignment, darkness, the camera, the filter wheel,
 the focuser. Those come later.
@@ -197,7 +200,9 @@ project is most concerned about.
   This is the most dangerous thing about the setup, and
   [`meridian-calibration.md`](meridian-calibration.md) exists for it.
 - **SD card, not NVMe.** SPEC section 2.2 lists the NVMe HAT and SSD as a
-  required purchase. Stacking write loads kill SD cards. Not blocking until M3.
+  required purchase. Stacking write loads kill SD cards. Not blocking until M3 —
+  but if the Pi needs re-imaging for Trixie anyway, fit the NVMe in the same
+  sitting.
 - **No secondary dew heater.** SPEC section 9.3 makes this blocking for M6.
 - **Rain is yours to watch.** There is no observatory, and parking does not
   protect the equipment (SPEC section 9.4).

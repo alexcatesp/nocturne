@@ -49,10 +49,13 @@ Option 3.
 ## Consequences
 
 - The M1 AUTO criteria are verifiable in CI with no display server and no Qt.
-- The Ekos DBus method names remain unverified against a real KStars until the
-  M1 HITL step. The bridge introspects the remote objects at connect time and
-  refuses to start if the methods it needs are absent, naming what it wanted and
-  what it found, so a wrong name is a loud startup failure rather than a call
-  that silently does nothing at night.
+- The Ekos DBus method names remain **unverified against a real KStars**. The
+  introspection guard is containment, not verification: it guarantees a wrong
+  name fails loudly at startup, and guarantees nothing about the names being
+  right. Verifying them, and adding the Optical Trains interface from KStars
+  3.8.2, is https://github.com/alexcatesp/nocturne/issues/2 — the first executor
+  task once a KStars build exists, which is blocked on Trixie (ADR 0008) and on
+  the KStars tag (ADR 0006). This is the second-largest unknown in the project
+  after the mount link.
 - Two connections are open during a session, one to indiserver and one to the
   session bus. Both are supervised and both reconnect on their own.

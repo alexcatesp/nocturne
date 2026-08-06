@@ -16,3 +16,4 @@ listed in SPEC.md section 4.
 | [0005](0005-executor-transport-settings.md) | Executor transport timings without a fourth YAML file | Accepted |
 | [0006](0006-building-from-source.md) | Building INDI, StellarSolver and KStars from source, at pinned tags | Accepted |
 | [0007](0007-m1-pointing-is-ungated.md) | M1 leaves pointing ungated, and how that is contained | Accepted (limitation) |
+| [0008](0008-raspberry-pi-os-trixie.md) | Raspberry Pi OS Trixie, not Bookworm — KStars 3.8.x is Qt6/KF6 | Accepted |

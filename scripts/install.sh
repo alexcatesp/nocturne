@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Nocturne installer for Raspberry Pi OS 64-bit — SPEC sections 4 and 14 (M1).
+# Nocturne installer for Raspberry Pi OS 64-bit, TRIXIE (Debian 13) or later.
+# SPEC sections 4 and 14 (M1).
 #
 # Native install. No Docker: SPEC section 4 rules it out because the USB
 # passthrough friction outweighs the benefits, and this machine has five USB
@@ -15,7 +16,10 @@
 #   StellarSolver           plate solving, with local astrometry.net indices
 #                           sized for the 39-arcminute field of the
 #                           200PDS + ASI533MM (SPEC section 2.1).
-#   KStars/Ekos             built against the INDI above, run headless.
+#   KStars/Ekos             built against the INDI above, run headless. 3.8.x is
+#                           Qt6/KF6, which is why Trixie is required: Debian 12
+#                           (Bookworm) ships KF5 only. See
+#                           docs/decisions/0008-raspberry-pi-os-trixie.md.
 #   Siril                   stacking (SPEC section 10.3).
 #   Nocturne                a Python virtual environment and this package.
 #
@@ -67,6 +71,27 @@ readonly INDEX_MAX_HEALPIX=47
 
 readonly BUILD_DIR_DEFAULT="${HOME}/.cache/nocturne-build"
 readonly REQUIRED_ARCH="aarch64"
+
+# Raspberry Pi OS Trixie is Debian 13. KStars 3.8.x is a Qt6/KF6 application;
+# Debian 12 (Bookworm) ships KF5 only, and building the KF6 tree from source on
+# a Pi is days of work that probably never completes.
+readonly REQUIRED_DEBIAN_VERSION=13
+readonly REQUIRED_DEBIAN_NAME="trixie"
+
+# KStars 3.8.x build dependencies, Debian 13 package names. If a name here is
+# wrong for your release, check_kstars_build_dependencies() names it before any
+# compiler runs — correct it here, in one place.
+readonly QT6_BUILD_PACKAGES=(
+    qt6-base-dev qt6-base-dev-tools qt6-declarative-dev qt6-svg-dev
+    qt6-tools-dev qt6-tools-dev-tools qt6-positioning-dev qt6-multimedia-dev
+    qt6-websockets-dev qt6-5compat-dev libqt6sql6-sqlite
+)
+readonly KF6_BUILD_PACKAGES=(
+    extra-cmake-modules libkf6config-dev libkf6coreaddons-dev libkf6crash-dev
+    libkf6doctools-dev libkf6guiaddons-dev libkf6i18n-dev libkf6kio-dev
+    libkf6newstuff-dev libkf6notifications-dev libkf6plotting-dev
+    libkf6widgetsaddons-dev libkf6xmlgui-dev
+)
 readonly REQUIRED_DISK_GB=12
 readonly PYTHON_MINIMUM="3.11"
 
@@ -255,14 +280,7 @@ preflight() {
     fi
     ok "architecture ${arch}"
 
-    if [[ -r /etc/os-release ]]; then
-        # shellcheck disable=SC1091  # provided by the OS, not this repository
-        . /etc/os-release
-        info "OS: ${PRETTY_NAME:-unknown}"
-        if [[ ${ID:-} != "debian" && ${ID_LIKE:-} != *debian* ]]; then
-            warn "this installer is written for Raspberry Pi OS (Debian). Continuing anyway."
-        fi
-    fi
+    check_os_release
 
     if ! command -v sudo >/dev/null 2>&1 && [[ ${EUID} -ne 0 ]]; then
         fail "sudo is not installed and this is not running as root"
@@ -287,6 +305,90 @@ preflight() {
     if ! ping -c1 -W3 data.astrometry.net >/dev/null 2>&1; then
         warn "data.astrometry.net is not answering; the index download may fail"
     fi
+
+    # Before any compiler runs, not an hour into one.
+    check_kstars_build_dependencies
+}
+
+check_os_release() {
+    if [[ ! -r /etc/os-release ]]; then
+        fail "cannot read /etc/os-release, so the OS release cannot be checked"
+    fi
+    # shellcheck disable=SC1091  # provided by the OS, not this repository
+    . /etc/os-release
+    info "OS: ${PRETTY_NAME:-unknown}"
+
+    if [[ ${ID:-} != "debian" && ${ID_LIKE:-} != *debian* ]]; then
+        fail "this installer targets Raspberry Pi OS, which is Debian based.
+    Found ID='${ID:-unknown}'."
+    fi
+
+    # Only Debian's own version numbers are comparable with Debian 13. A
+    # debian-derived OS with a different scheme (Ubuntu's 24.04, say) is left to
+    # the package check below, which is the real gate.
+    if [[ ${ID:-} != "debian" && ${ID:-} != "raspbian" ]]; then
+        warn "'${ID:-unknown}' is Debian-derived but is not Raspberry Pi OS;"
+        warn "the Qt6/KF6 package check below decides whether it can build KStars"
+        return 0
+    fi
+
+    local major="${VERSION_ID:-0}"
+    major="${major%%.*}"
+    if [[ ! ${major} =~ ^[0-9]+$ ]] || (( major < REQUIRED_DEBIAN_VERSION )); then
+        fail "Raspberry Pi OS ${REQUIRED_DEBIAN_NAME} (Debian ${REQUIRED_DEBIAN_VERSION}) or
+    later is required. This is Debian '${VERSION_ID:-unknown}'
+    (${VERSION_CODENAME:-unknown}).
+
+    Why: KStars 3.8.x is a Qt6/KF6 application. Debian 12 (bookworm) ships KF5
+    only, so building KStars there would mean building Qt6 and the whole KF6
+    tree from source on a Raspberry Pi — days of compilation that in practice
+    does not complete. Trixie ships Plasma 6 and therefore packaged KF6.
+
+    Re-image the Pi with a current Raspberry Pi OS 64-bit release, or run with
+    --skip-kstars to install INDI and Nocturne only.
+    See docs/decisions/0008-raspberry-pi-os-trixie.md."
+    fi
+    ok "Debian ${VERSION_ID} (${VERSION_CODENAME:-?}) — Qt6/KF6 available"
+}
+
+# Refuse before building anything if the toolkit KStars needs is not obtainable.
+# Distinguishes "not installed but in the archive" from "apt has never heard of
+# this name", because the second means the package list is wrong for this
+# release and no amount of apt-get will fix it.
+check_kstars_build_dependencies() {
+    if [[ ${SKIP_KSTARS} -eq 1 ]]; then
+        info "KStars skipped; not checking Qt6/KF6"
+        return 0
+    fi
+
+    step "Checking the Qt6 and KF6 packages KStars 3.8.x needs"
+    local installable=() unknown=() package
+    for package in "${QT6_BUILD_PACKAGES[@]}" "${KF6_BUILD_PACKAGES[@]}"; do
+        if dpkg-query -W -f='${Status}' "${package}" 2>/dev/null | grep -q "ok installed"; then
+            continue
+        fi
+        if apt-cache show "${package}" >/dev/null 2>&1; then
+            installable+=("${package}")
+        else
+            unknown+=("${package}")
+        fi
+    done
+
+    if (( ${#unknown[@]} > 0 )); then
+        fail "apt does not know these packages on this release:
+        ${unknown[*]}
+
+    That means either the OS is not what this installer expects, or the package
+    names in QT6_BUILD_PACKAGES / KF6_BUILD_PACKAGES at the top of this script
+    are wrong for your Raspberry Pi OS version. Check with:
+        apt-cache search --names-only '^libkf6.*-dev$'
+    and correct the list. Nothing has been built."
+    fi
+
+    if (( ${#installable[@]} > 0 )); then
+        info "${#installable[@]} package(s) still to install; they are in the archive"
+    fi
+    ok "every Qt6/KF6 build dependency is installed or available"
 }
 
 install_build_dependencies() {
@@ -306,13 +408,9 @@ install_build_dependencies() {
 install_kstars_dependencies() {
     step "Installing KStars build dependencies"
     as_root apt-get install -y --no-install-recommends \
-        extra-cmake-modules qtbase5-dev qtdeclarative5-dev libqt5svg5-dev \
-        qtpositioning5-dev qtmultimedia5-dev libqt5websockets5-dev \
-        libqt5sql5-sqlite kdoctools-dev libkf5config-dev libkf5crash-dev \
-        libkf5doctools-dev libkf5i18n-dev libkf5newstuff-dev \
-        libkf5notifications-dev libkf5plotting-dev libkf5xmlgui-dev \
+        "${QT6_BUILD_PACKAGES[@]}" "${KF6_BUILD_PACKAGES[@]}" \
         libeigen3-dev wcslib-dev
-    ok "KStars dependencies installed"
+    ok "Qt6 and KF6 build dependencies installed"
 }
 
 build_indi() {

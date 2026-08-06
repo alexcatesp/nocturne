@@ -12,12 +12,22 @@ What the distributions actually ship:
 
 | Source | INDI version | Verdict |
 |---|---|---|
-| Raspberry Pi OS Bookworm (Debian) | 1.9.x | Too old |
+| Raspberry Pi OS Bookworm (Debian 12) | 1.9.x | Too old, and superseded as a target by ADR 0008 |
+| Raspberry Pi OS Trixie (Debian 13) | 2.0.x–2.1.x at freeze | **Unverified from the development environment** — see below |
 | Ubuntu 24.04 universe | 1.9.9 | Too old |
 | indilib PPA (`ppa:mutlaqja/ppa`) | 2.x | Ubuntu only; Raspberry Pi OS is Debian, and PPAs do not apply to it |
 | Astroberry repository | 1.9.x era | Discontinued |
 
-There is no packaged INDI >= 2.2.3 for Raspberry Pi OS. The ZWO drivers
+**Confirm this on the Pi before assuming the source build is needed.** Trixie is
+newer than Bookworm and its INDI may be closer to the floor. The one-line check
+is `apt-cache policy libindi-dev`; if it reports 2.2.3 or later, the INDI and
+indi-3rdparty source builds can be dropped in favour of packages, which removes
+most of the build time. The development environment for this repository could
+not reach Debian's package data, so this is stated as a check to perform, not a
+fact established.
+
+At the time of writing there is no packaged INDI >= 2.2.3 known for Raspberry Pi
+OS. The ZWO drivers
 (`indi-asi`) come from `indi-3rdparty` and must link the same INDI. KStars must
 be built against that INDI, and StellarSolver is not packaged for Raspberry Pi
 OS at all.

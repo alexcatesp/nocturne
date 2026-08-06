@@ -155,7 +155,7 @@ implements. INDI Web Manager (LGPL) may be used for driver lifecycle management.
 
 | Concern | Choice | Notes |
 |---|---|---|
-| OS | Raspberry Pi OS 64-bit (Bookworm or later) | Native install, **no Docker** — USB passthrough friction outweighs benefits |
+| OS | Raspberry Pi OS 64-bit, **Trixie (Debian 13) or later** | Native install, **no Docker** — USB passthrough friction outweighs benefits. Trixie, not Bookworm: KStars 3.8.x is Qt6/KF6 and Debian 12 ships KF5 only (ADR 0008) |
 | Instrument control | INDI ≥ 2.2.3, KStars/Ekos headless | 2.2.3 added Wave 150i home indexer support in indi-eqmod |
 | Plate solving | StellarSolver + local astrometry.net indices | Offline. Index range sized for 39′ FOV |
 | Backend | Python 3.11+, FastAPI, uvicorn | |
