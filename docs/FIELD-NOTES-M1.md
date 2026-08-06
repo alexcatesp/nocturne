@@ -148,8 +148,9 @@ Behaviour and calibration values observed on the reference rig:
 | `ALIGNDATAFILE` | `~/.indi/AlignData.xml` | Alignment persists here — relevant to the portable-setup workflow |
 | `SIMULATION` | `DISABLE=On` | Confirms this was real hardware |
 
-**Open question for M2:** `RASTATUS.RARunning=Busy` and `DESTATUS.DERunning=Busy` were
-reported while `TELESCOPE_TRACK_STATE.TRACK_OFF=On`. This is most likely how the driver
+**Open question for M2 — tracked as [issue #3](https://github.com/alexcatesp/nocturne/issues/3),
+with the bench observations that would close it:** `RASTATUS.RARunning=Busy` and
+`DESTATUS.DERunning=Busy` were reported while `TELESCOPE_TRACK_STATE.TRACK_OFF=On`. This is most likely how the driver
 encodes strain wave motors holding position, but it has not been confirmed. Do not treat
 `RARunning` as a reliable indicator of physical motion until its semantics are
 established — it is the kind of assumption that produces a watchdog that never fires.
@@ -266,7 +267,7 @@ error message, check `dmesg` for the OOM killer and fall back to `-j1`.
 | Camera, EFW, EAF, guide camera bench tests | M1 HITL completion | Operator |
 | `install.sh` end-to-end run | Never executed; expect failures | Operator |
 | Ekos DBus method names | Issue #2 — still guesses | Claude Code, once KStars builds |
-| `RARunning` semantics while not tracking | Watchdog correctness | M2 |
+| `RARunning` semantics while not tracking | Watchdog correctness | M2 — [issue #3](https://github.com/alexcatesp/nocturne/issues/3) |
 
 ---
 

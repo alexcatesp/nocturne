@@ -287,6 +287,52 @@ class TestConfigurationIsNotWritable:
         assert not forbidden
 
 
+class TestRARunningIsNotTreatedAsMotion:
+    """github.com/alexcatesp/nocturne/issues/3.
+
+    The reference rig reported ``RASTATUS.RARunning=Busy`` and
+    ``DESTATUS.DERunning=Busy`` while parked with ``TRACK_OFF=On``
+    (docs/FIELD-NOTES-M1.md section 4). The obvious reading — "this axis is
+    moving" — is therefore wrong, or at best incomplete.
+
+    Until the semantics are established, nothing may use these properties as an
+    indicator of physical motion. A watchdog built on a property that is always
+    Busy is a watchdog that never fires, and it would look implemented while
+    doing nothing. This test is the enforcement: the property names may not
+    appear in the package at all, so M2 cannot reach for them absent-mindedly.
+    """
+
+    #: Elements whose meaning is unknown. Not "use with care" — do not use.
+    UNRESOLVED_MOTION_PROPERTIES = ("RARunning", "DERunning", "RAGoto", "DEGoto")
+
+    def test_no_module_names_a_property_whose_meaning_is_unresolved(self) -> None:
+        offenders: list[str] = []
+        for path in python_sources():
+            source = path.read_text(encoding="utf-8")
+            for line_number, line in enumerate(source.splitlines(), start=1):
+                named = [
+                    name for name in self.UNRESOLVED_MOTION_PROPERTIES if name in line
+                ]
+                if named:
+                    offenders.append(f"{module_name(path)}:{line_number} names {named}")
+        assert not offenders, (
+            f"{'; '.join(offenders)}\n"
+            "These properties read Busy on a parked, non-tracking mount, so their "
+            "meaning is not known. Resolve issue #3 before using one, and delete "
+            "this test on purpose when you do — do not weaken it to make a build "
+            "pass."
+        )
+
+    def test_the_fixture_still_shows_the_behaviour_that_prompted_this(self) -> None:
+        """If the recorded evidence changes, the constraint should be revisited."""
+        from tests.fixtures.eqmod import load_recorded_properties
+
+        recorded = load_recorded_properties()
+        assert recorded["RASTATUS"].values["RARunning"] == "Busy"
+        assert recorded["DESTATUS"].values["DERunning"] == "Busy"
+        assert recorded["TELESCOPE_TRACK_STATE"].values["TRACK_OFF"] is True
+
+
 class TestRuleEvaluation:
     """The loop M2's limits will run through, exercised now rather than then."""
 
