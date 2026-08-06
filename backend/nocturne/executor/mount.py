@@ -35,6 +35,7 @@ from collections.abc import Callable, Coroutine
 from types import TracebackType
 from typing import Final, final
 
+from nocturne.devices import require_configured_port
 from nocturne.executor.executor import Executor
 from nocturne.executor.indi.client import (
     CONNECT_ELEMENT,
@@ -108,21 +109,28 @@ def sidereal_multiple(deg_per_second: float) -> int:
 class MountLink:
     """Brings one mount up as configured, and keeps its slew ceiling applied.
 
-    The INDI device name is passed in rather than read from configuration:
-    ``indi_eqmod`` announces itself as "EQMod Mount", which is the driver's
-    name for it and not the operator's. ``equipment.yaml`` carries
-    ``device_label`` for the operator; the two are not interchangeable.
+    The INDI device name comes from ``equipment.yaml``
+    (``mount.indi_device_name``) and not from a constant here: ``indi_eqmod``
+    announces itself as "EQMod Mount", which is the driver's name for the
+    device and is equipment-dependent, so it is configuration (CLAUDE.md
+    section 6). ``device_label`` is the operator's name for the same object and
+    is never used to address it.
     """
 
-    def __init__(self, executor: Executor, config: Mount, *, device: str) -> None:
+    def __init__(self, executor: Executor, config: Mount) -> None:
         self._executor = executor
         self._config = config
-        self._device = device
+        self._device = config.indi_device_name
         # Converted once, at construction, so a limit the driver cannot express
         # fails before anything is connected rather than after.
         self._slew_multiple = sidereal_multiple(config.slew_rate_max_deg_s)
         self._lock = asyncio.Lock()
         self._was_connected = False
+        # True while bring_up() is driving. The watcher stands down: bring_up
+        # performs the connect and the ceiling itself, in order, and a second
+        # application racing it would write the same values twice and log a
+        # spurious failure if it lost the race to a vector not yet defined.
+        self._bringing_up = False
         self._port_in_use: str | None = None
         self._unsubscribe: Callable[[], None] | None = None
         self._tasks: set[asyncio.Task[None]] = set()
@@ -180,24 +188,34 @@ class MountLink:
         SLEWSPEEDS is written afterwards, because the driver does not define it
         until it has spoken to the controller.
 
-        Watching starts before the connect, not after, so that a driver restart
-        arriving in the middle of bring-up is still seen. That means the first
-        connect can trigger a re-application on top of the one this method
-        performs. The write is idempotent and the two are serialised, so the
-        cost is one redundant write and the benefit is no gap.
+        Watching starts here and stays on afterwards, but the watcher stands
+        down for the duration: this method performs the connect and then the
+        ceiling, in that order, and a re-application triggered by its own
+        connect would be racing it. If the driver dies mid-bring-up, the awaits
+        below fail and the caller hears about it, which is the right outcome —
+        a half-finished bring-up should not be quietly retried underneath.
 
         Raises:
+            MissingSerialDeviceError: if a configured port is not present.
             MountBringUpError: if the driver does not offer what is configured.
             SafetyViolation: if the governor refuses one of the writes.
         """
         self.watch()
-        await self._executor.wait_for_property(
-            self._device, CONNECTION_PROPERTY, timeout=timeout
-        )
-        await self._select_baud_rate(timeout=timeout)
-        await self._select_port(timeout=timeout)
-        await self._executor.connect_device(self._device, timeout=timeout)
-        await self.apply_slew_limit(timeout=timeout)
+        self._bringing_up = True
+        try:
+            await self._executor.wait_for_property(
+                self._device, CONNECTION_PROPERTY, timeout=timeout
+            )
+            await self._select_baud_rate(timeout=timeout)
+            await self._select_port(timeout=timeout)
+            await self._executor.connect_device(self._device, timeout=timeout)
+            await self.apply_slew_limit(timeout=timeout)
+        finally:
+            # Whatever happened, hand the watcher an accurate starting point:
+            # it re-applies on a transition, so a wrong baseline here would
+            # either fire spuriously or miss the next real reconnection.
+            self._was_connected = self._executor.is_device_connected(self._device)
+            self._bringing_up = False
         logger.info(
             "mount is up",
             extra={
@@ -231,6 +249,11 @@ class MountLink:
 
     async def _select_port(self, *, timeout: float | None) -> None:
         """Use the driver's port unless the configuration overrides it (section 2.3)."""
+        # An override naming a device that is not there is a hard stop, before
+        # the driver is told anything. Falling back to what the driver found
+        # would mean using a different mount from the one Nocturne was told to
+        # use, which is how a cable in the wrong socket goes unnoticed.
+        require_configured_port(self._config.port, label=self._config.device_label)
         prop = await self._executor.wait_for_property(
             self._device, PORT_PROPERTY, timeout=timeout
         )
@@ -332,6 +355,8 @@ class MountLink:
             case PropertyChanged(property=prop) if (
                 prop.device == self._device and prop.name == CONNECTION_PROPERTY
             ):
+                if self._bringing_up:
+                    return
                 connected = prop.get(CONNECT_ELEMENT) is True
                 if connected and not self._was_connected:
                     self._spawn(self._reapply())

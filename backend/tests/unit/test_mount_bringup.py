@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pytest
 
+from nocturne.devices import MissingSerialDeviceError
 from nocturne.executor.executor import Executor
 from nocturne.executor.indi.client import IndiClient
 from nocturne.executor.indi.protocol import PropertyKind
@@ -54,16 +55,16 @@ FAST = IndiSettings(
     reconnect_max_delay_s=0.05,
 )
 
-#: The reference rig's mount, as SPEC section 5.1 configures it.
-REFERENCE_PORT = (
-    "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_8F8B50B10E31-if00"
-)
+#: The port the real driver reported, read out of the recorded dump rather than
+#: retyped: it is one rig's serial number and belongs in exactly one file.
+REFERENCE_PORT = str(load_recorded_properties()[PORT_PROPERTY].values[PORT_ELEMENT])
 
 
 def mount_config(**overrides: object) -> Mount:
     """The reference mount configuration, with fields replaced for one test."""
     fields: dict[str, object] = {
         "indi_driver": "indi_eqmod_telescope",
+        "indi_device_name": EQMOD_DEVICE,
         "device_label": "Wave 150i",
         "connection": "serial",
         "port": REFERENCE_PORT,
@@ -73,6 +74,18 @@ def mount_config(**overrides: object) -> Mount:
     }
     fields.update(overrides)
     return Mount.model_validate(fields)
+
+
+@pytest.fixture(autouse=True)
+def the_configured_port_is_plugged_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Say the device is present, for every test that does not say otherwise.
+
+    These tests talk to a fake INDI server, so the configured port names a
+    device that is not on the machine running the suite. The real check is
+    exercised in test_devices.py; that MountLink calls it, and refuses when it
+    fails, is exercised in TestAConfiguredPortThatIsNotThere below.
+    """
+    monkeypatch.setattr("nocturne.devices.serial_device_exists", lambda _port: True)
 
 
 @pytest.fixture
@@ -140,7 +153,7 @@ class TestTheSlewRateLimitIsApplied:
     ) -> None:
         assert slew_speeds(server) == {RA_SLEW_ELEMENT: 800.0, DE_SLEW_ELEMENT: 800.0}
 
-        link = MountLink(executor, mount_config(), device=EQMOD_DEVICE)
+        link = MountLink(executor, mount_config())
         async with link:
             await link.bring_up()
             assert slew_speeds(server) == {RA_SLEW_ELEMENT: 718.0, DE_SLEW_ELEMENT: 718.0}
@@ -149,7 +162,7 @@ class TestTheSlewRateLimitIsApplied:
         self, executor: Executor, server: FakeIndiServer
     ) -> None:
         """The value comes from config, not from a constant in the code."""
-        link = MountLink(executor, mount_config(slew_rate_max_deg_s=1.0), device=EQMOD_DEVICE)
+        link = MountLink(executor, mount_config(slew_rate_max_deg_s=1.0))
         async with link:
             await link.bring_up()
             assert slew_speeds(server) == {RA_SLEW_ELEMENT: 239.0, DE_SLEW_ELEMENT: 239.0}
@@ -157,14 +170,24 @@ class TestTheSlewRateLimitIsApplied:
     async def test_it_waits_for_the_vector_the_driver_defines_only_after_connect(
         self, executor: Executor, server: FakeIndiServer
     ) -> None:
-        """SLEWSPEEDS is not in the cache until the driver has read the mount."""
-        withheld = server.devices[EQMOD_DEVICE].pop(SLEW_SPEEDS_PROPERTY)
-        link = MountLink(executor, mount_config(), device=EQMOD_DEVICE)
+        """SLEWSPEEDS is not in the cache until the driver has read the mount.
 
+        The withholding has to reach the *client's* cache, not just the
+        server's dictionary — hence the delProperty. Popping it server-side
+        alone leaves the client holding the definition it was sent at
+        connection time, and the wait this test is about never happens.
+        """
+        withheld = server.devices[EQMOD_DEVICE].pop(SLEW_SPEEDS_PROPERTY)
+        await server.broadcast(
+            f'<delProperty device="{EQMOD_DEVICE}" name="{SLEW_SPEEDS_PROPERTY}"/>'.encode()
+        )
+        await _until(lambda: executor.get_property(EQMOD_DEVICE, SLEW_SPEEDS_PROPERTY) is None)
+
+        link = MountLink(executor, mount_config())
         async with link:
             waiting = asyncio.create_task(link.bring_up())
             await asyncio.sleep(0.05)
-            assert not waiting.done()
+            assert not waiting.done(), "it did not wait for the vector"
 
             server.devices[EQMOD_DEVICE][SLEW_SPEEDS_PROPERTY] = withheld
             await server.broadcast(withheld.define(EQMOD_DEVICE))
@@ -179,7 +202,7 @@ class TestTheSlewRateLimitSurvivesRecovery:
     async def test_a_driver_restart_does_not_silently_restore_800(
         self, executor: Executor, server: FakeIndiServer
     ) -> None:
-        link = MountLink(executor, mount_config(), device=EQMOD_DEVICE)
+        link = MountLink(executor, mount_config())
         async with link:
             await link.bring_up()
             assert slew_speeds(server) == {RA_SLEW_ELEMENT: 718.0, DE_SLEW_ELEMENT: 718.0}
@@ -196,7 +219,7 @@ class TestTheSlewRateLimitSurvivesRecovery:
     async def test_a_server_reconnection_does_not_silently_restore_800(
         self, executor: Executor, server: FakeIndiServer
     ) -> None:
-        link = MountLink(executor, mount_config(), device=EQMOD_DEVICE)
+        link = MountLink(executor, mount_config())
         async with link:
             await link.bring_up()
 
@@ -209,7 +232,7 @@ class TestTheSlewRateLimitSurvivesRecovery:
     async def test_the_watcher_stops_when_the_link_is_closed(
         self, executor: Executor, server: FakeIndiServer
     ) -> None:
-        link = MountLink(executor, mount_config(), device=EQMOD_DEVICE)
+        link = MountLink(executor, mount_config())
         async with link:
             await link.bring_up()
         assert not link.is_watching
@@ -242,7 +265,7 @@ class TestWhenTheCeilingCannotBeApplied:
 
         await _until(one_axis_is_cached)
 
-        link = MountLink(executor, mount_config(), device=EQMOD_DEVICE)
+        link = MountLink(executor, mount_config())
         async with link:
             with pytest.raises(MountBringUpError, match=DE_SLEW_ELEMENT):
                 await link.bring_up()
@@ -254,7 +277,7 @@ class TestWhenTheCeilingCannotBeApplied:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """The watcher runs in a bare task: an exception there has nowhere to go."""
-        link = MountLink(executor, mount_config(), device=EQMOD_DEVICE)
+        link = MountLink(executor, mount_config())
         async with link:
             await link.bring_up()
 
@@ -278,13 +301,13 @@ class TestWhenTheCeilingCannotBeApplied:
     ) -> None:
         """A limit the driver cannot express is caught at construction."""
         with pytest.raises(MountBringUpError):
-            MountLink(executor, mount_config(slew_rate_max_deg_s=0.001), device=EQMOD_DEVICE)
+            MountLink(executor, mount_config(slew_rate_max_deg_s=0.001))
         assert (EQMOD_DEVICE, "CONNECTION") not in server.writes
 
 
 class TestTheWatcherLifecycle:
     async def test_watching_twice_subscribes_once(self, executor: Executor) -> None:
-        link = MountLink(executor, mount_config(), device=EQMOD_DEVICE)
+        link = MountLink(executor, mount_config())
         async with link:
             link.watch()
             link.watch()
@@ -292,7 +315,7 @@ class TestTheWatcherLifecycle:
         assert not link.is_watching
 
     async def test_closing_an_unwatched_link_is_harmless(self, executor: Executor) -> None:
-        link = MountLink(executor, mount_config(), device=EQMOD_DEVICE)
+        link = MountLink(executor, mount_config())
         link.stop_watching()
         await link.aclose()
         assert not link.is_watching
@@ -300,7 +323,7 @@ class TestTheWatcherLifecycle:
     async def test_the_configured_ceiling_is_readable_without_connecting(
         self, executor: Executor
     ) -> None:
-        link = MountLink(executor, mount_config(), device=EQMOD_DEVICE)
+        link = MountLink(executor, mount_config())
         assert link.device == EQMOD_DEVICE
         assert link.slew_speed_multiple == 718
         assert link.port_in_use is None
@@ -315,7 +338,7 @@ class TestTheBaudRateIsSetBeforeConnect:
         baud = server.devices[EQMOD_DEVICE][BAUD_PROPERTY]
         assert baud.values["9600"] is True
 
-        link = MountLink(executor, mount_config(), device=EQMOD_DEVICE)
+        link = MountLink(executor, mount_config())
         async with link:
             await link.bring_up()
 
@@ -326,7 +349,7 @@ class TestTheBaudRateIsSetBeforeConnect:
         self, executor: Executor, server: FakeIndiServer
     ) -> None:
         """Order matters: still at 9600 when CONNECT lands means no link at all."""
-        link = MountLink(executor, mount_config(), device=EQMOD_DEVICE)
+        link = MountLink(executor, mount_config())
         async with link:
             await link.bring_up()
 
@@ -339,7 +362,7 @@ class TestTheBaudRateIsSetBeforeConnect:
     async def test_a_rate_the_driver_does_not_offer_is_refused_loudly(
         self, executor: Executor
     ) -> None:
-        link = MountLink(executor, mount_config(baud=4800), device=EQMOD_DEVICE)
+        link = MountLink(executor, mount_config(baud=4800))
         async with link:
             with pytest.raises(MountBringUpError, match="4800"):
                 await link.bring_up()
@@ -351,7 +374,7 @@ class TestThePortComesFromTheDriverFirst:
     async def test_an_unset_port_uses_the_one_the_driver_reports(
         self, executor: Executor, server: FakeIndiServer
     ) -> None:
-        link = MountLink(executor, mount_config(port=None), device=EQMOD_DEVICE)
+        link = MountLink(executor, mount_config(port=None))
         async with link:
             await link.bring_up()
 
@@ -362,7 +385,7 @@ class TestThePortComesFromTheDriverFirst:
     async def test_a_configured_port_overrides_the_driver(
         self, executor: Executor, server: FakeIndiServer
     ) -> None:
-        link = MountLink(executor, mount_config(port="/dev/ttyACM1"), device=EQMOD_DEVICE)
+        link = MountLink(executor, mount_config(port="/dev/ttyACM1"))
         async with link:
             await link.bring_up()
 
@@ -379,10 +402,97 @@ class TestThePortComesFromTheDriverFirst:
         )
         await server.broadcast(server.devices[EQMOD_DEVICE][PORT_PROPERTY].define(EQMOD_DEVICE))
 
-        link = MountLink(executor, mount_config(port=None), device=EQMOD_DEVICE)
+        link = MountLink(executor, mount_config(port=None))
         async with link:
             with pytest.raises(MountBringUpError, match="did not report a port"):
                 await link.bring_up()
+
+
+class TestAConfiguredPortThatIsNotThere:
+    """The override must not degrade into auto-detection."""
+
+    async def test_bring_up_refuses_before_it_touches_the_driver(
+        self, executor: Executor, server: FakeIndiServer, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("nocturne.devices.serial_device_exists", lambda _port: False)
+        link = MountLink(executor, mount_config())
+
+        async with link:
+            with pytest.raises(MissingSerialDeviceError, match=REFERENCE_PORT):
+                await link.bring_up()
+
+        # Nothing was said to the mount, and in particular it was not connected
+        # on whatever port the driver happened to have found.
+        assert (EQMOD_DEVICE, "CONNECTION") not in server.writes
+        assert slew_speeds(server) == {RA_SLEW_ELEMENT: 800.0, DE_SLEW_ELEMENT: 800.0}
+
+    async def test_an_unset_port_is_unaffected_by_the_check(
+        self, executor: Executor, server: FakeIndiServer, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """There is no configured device to be missing."""
+        monkeypatch.setattr("nocturne.devices.serial_device_exists", lambda _port: False)
+        link = MountLink(executor, mount_config(port=None))
+
+        async with link:
+            await link.bring_up()
+
+        assert slew_speeds(server) == {RA_SLEW_ELEMENT: 718.0, DE_SLEW_ELEMENT: 718.0}
+
+
+class TestTheDeviceNameComesFromConfiguration:
+    """CLAUDE.md section 6: no hardcoded equipment."""
+
+    async def test_the_link_addresses_the_device_the_config_names(
+        self, executor: Executor
+    ) -> None:
+        link = MountLink(executor, mount_config())
+        assert link.device == EQMOD_DEVICE
+
+    async def test_a_different_configured_name_addresses_a_different_device(
+        self, executor: Executor
+    ) -> None:
+        link = MountLink(executor, mount_config(indi_device_name="Some Other Mount"))
+        assert link.device == "Some Other Mount"
+
+    async def test_the_display_label_is_never_used_to_address_the_device(
+        self, executor: Executor
+    ) -> None:
+        """device_label is translatable; addressing by it would break in French."""
+        link = MountLink(executor, mount_config(device_label="Monture Wave 150i"))
+        assert link.device == EQMOD_DEVICE
+
+    async def test_the_module_hardcodes_no_device_name(self) -> None:
+        """Prose may name the reference mount; code may not.
+
+        Docstrings are excluded deliberately — explaining *why* the name is
+        configuration requires saying what the name is.
+        """
+        import ast
+        import inspect
+
+        from nocturne.executor import mount as mount_module
+
+        tree = ast.parse(inspect.getsource(mount_module))
+        docstrings = {
+            id(node.body[0].value)
+            for node in ast.walk(tree)
+            if isinstance(
+                node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef
+            )
+            and node.body
+            and isinstance(node.body[0], ast.Expr)
+            and isinstance(node.body[0].value, ast.Constant)
+            and isinstance(node.body[0].value.value, str)
+        }
+        literals = [
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and id(node) not in docstrings
+        ]
+        offenders = [text for text in literals if "EQMod" in text or "Wave 150i" in text]
+        assert not offenders, f"the device name is hardcoded in mount.py: {offenders}"
 
 
 class TestEverythingGoesThroughTheGovernor:
@@ -409,7 +519,7 @@ class TestEverythingGoesThroughTheGovernor:
         registry[SetProperty] = (refuse,)
         monkeypatch.setattr(governor_module, "COMMAND_RULES", registry)
 
-        link = MountLink(executor, mount_config(), device=EQMOD_DEVICE)
+        link = MountLink(executor, mount_config())
         async with link:
             with pytest.raises(SafetyViolation):
                 await link.bring_up()
