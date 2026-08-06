@@ -398,52 +398,91 @@ class TestDecisionContract:
         assert Anonymous().describe() == "Anonymous"
 
 
-class TestTheBenchTestMovesNothing:
-    """docs/hardware-setup.md promises the operator that no motor turns."""
+#: INDI vectors that command motion. None may be written by anything the bench
+#: procedure runs.
+MOVING_PROPERTIES = (
+    "EQUATORIAL_EOD_COORD",
+    "EQUATORIAL_COORD",
+    "TELESCOPE_PARK",
+    "TELESCOPE_MOTION_NS",
+    "TELESCOPE_MOTION_WE",
+    "TELESCOPE_TIMED_GUIDE",
+    "ON_COORD_SET",
+    "TELESCOPE_ABORT_MOTION",
+)
 
-    #: INDI vectors that command motion. None may appear in the bench script.
-    MOVING_PROPERTIES = (
-        "EQUATORIAL_EOD_COORD",
-        "EQUATORIAL_COORD",
-        "TELESCOPE_PARK",
-        "TELESCOPE_MOTION_NS",
-        "TELESCOPE_MOTION_WE",
-        "TELESCOPE_TIMED_GUIDE",
-        "ON_COORD_SET",
-        "TELESCOPE_ABORT_MOTION",
-    )
+#: Every way a caller can reach the instrument. The bench script drives the
+#: Executor rather than the raw client, so scanning only ``write()`` would now
+#: find nothing at all and pass while the script slewed the mount.
+MUTATING_CALLS = frozenset(
+    {"write", "set_property", "connect_device", "disconnect_device", "_perform"}
+)
+
+
+def properties_written_by(path: Path) -> set[str]:
+    """String constants handed to any call that reaches the instrument."""
+    written: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in MUTATING_CALLS
+        ):
+            written |= {
+                argument.value
+                for argument in ast.walk(node)
+                if isinstance(argument, ast.Constant) and isinstance(argument.value, str)
+            }
+    return written
+
+
+class TestTheBenchTestMovesNothing:
+    """docs/hardware-setup.md promises the operator that no motor turns.
+
+    The script now brings the mount up through Executor and MountLink — the
+    same path a session will use — rather than through a parallel one that
+    could drift from it. That means the promise covers two files, so both are
+    checked: what the script writes directly, and what the bring-up sequence
+    it calls writes on its behalf.
+    """
+
+    BENCH_SCRIPT = PACKAGE_ROOT.parent / "scripts" / "bench-test-mount.py"
+    MOUNT_MODULE = PACKAGE_ROOT / "nocturne" / "executor" / "mount.py"
 
     def script(self) -> str:
-        return (PACKAGE_ROOT.parent / "scripts" / "bench-test-mount.py").read_text(
-            encoding="utf-8"
-        )
+        return self.BENCH_SCRIPT.read_text(encoding="utf-8")
 
     def test_the_script_exists_where_the_procedure_says_it_does(self) -> None:
-        assert (PACKAGE_ROOT.parent / "scripts" / "bench-test-mount.py").is_file()
+        assert self.BENCH_SCRIPT.is_file()
 
     def test_it_writes_no_property_that_commands_motion(self) -> None:
-        """Every string handed to a write() call, checked against the motion list."""
-        tree = ast.parse(self.script())
-        written: set[str] = set()
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "write"
-            ):
-                written |= {
-                    argument.value
-                    for argument in ast.walk(node)
-                    if isinstance(argument, ast.Constant) and isinstance(argument.value, str)
-                }
-        offenders = sorted(written & set(self.MOVING_PROPERTIES))
+        offenders = sorted(properties_written_by(self.BENCH_SCRIPT) & set(MOVING_PROPERTIES))
         assert not offenders, (
             f"the bench script writes {offenders}, which moves the mount. "
             "docs/hardware-setup.md tells the operator nothing moves."
         )
 
+    def test_the_bring_up_sequence_it_calls_moves_nothing_either(self) -> None:
+        """MountLink writes on the script's behalf; the promise covers it too."""
+        offenders = sorted(properties_written_by(self.MOUNT_MODULE) & set(MOVING_PROPERTIES))
+        assert not offenders, (
+            f"MountLink writes {offenders}, which moves the mount. The bench "
+            "procedure calls bring_up(), so this breaks its promise as well."
+        )
+
+    def test_the_scan_actually_sees_the_calls_the_script_makes(self) -> None:
+        """Guard: an empty scan would make the two tests above vacuous.
+
+        If the script is rewritten onto some third API, this fails rather than
+        quietly passing.
+        """
+        found = properties_written_by(self.BENCH_SCRIPT)
+        assert found, "no instrument call was found in the bench script at all"
+        assert "GEOGRAPHIC_COORD" in found, sorted(found)
+
     def test_it_never_turns_tracking_on(self) -> None:
         assert "TRACK_ON" not in self.script()
+        assert "TRACK_ON" not in self.MOUNT_MODULE.read_text(encoding="utf-8")
 
     def test_the_procedure_promises_no_motion(self) -> None:
         procedure = (PACKAGE_ROOT.parent / "docs" / "hardware-setup.md").read_text(

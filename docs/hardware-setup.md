@@ -44,10 +44,10 @@ ls -l /dev/serial/by-id/
 **Good:** one line comes back. On the Wave 150i it reads:
 
 ```
-usb-STMicroelectronics_STM32_Virtual_ComPort_8F8B50B10E31-if00 -> ../../ttyACM0
+usb-STMicroelectronics_STM32_Virtual_ComPort_XXXXXXXXXXXX-if00 -> ../../ttyACM0
 ```
 
-The serial number in the middle is yours and will differ. The two things to
+The `XXXXXXXXXXXX` in the middle is your mount's own serial number and will be a real one. The two things to
 check are `STM32_Virtual_ComPort` and that it points at **`ttyACM`**, not
 `ttyUSB`. The Wave 150i has no separate USB-serial chip: the controller board
 presents the port itself, so the kernel loads `cdc_acm`. If you have read
@@ -75,20 +75,45 @@ nano config/equipment.yaml
 Find the `mount:` section near the bottom, and the line `port:`. Change it to
 the path from step 1, in full, in quotes:
 
+**Most of the time you do not need to do this at all.** The shipped file has:
+
 ```yaml
 mount:
-  port: "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_8F8B50B10E31-if00"
+  port: null
 ```
 
-Use your own serial number, not the one printed here. Use the
-`/dev/serial/by-id/` path and not `/dev/ttyACM0`: `ttyACM0` is handed out in
-the order things are plugged in, so it can become `ttyACM1` the moment another
-USB serial device appears, and Nocturne would then be talking to the wrong
-device. The `by-id` path never moves.
+which means "use the port the driver finds", and the driver finds it correctly.
+Leave it alone unless you have a reason not to.
 
-You can also leave the `port:` line out entirely. The driver finds the mount
-by itself and Nocturne uses whatever it reports; setting `port:` overrides
-that, which is what you want if the driver ever picks the wrong one.
+Set it only to override that — for instance if two mounts are plugged in at
+once. Paste in the path from step 1, in full, in quotes:
+
+```yaml
+mount:
+  port: "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_XXXXXXXXXXXX-if00"
+```
+
+with `XXXXXXXXXXXX` replaced by the serial number your own mount reported. Use
+the `/dev/serial/by-id/` path and not `/dev/ttyACM0`: `ttyACM0` is handed out
+in the order things are plugged in, so it can become `ttyACM1` the moment
+another USB serial device appears, and Nocturne would then be talking to the
+wrong device. The `by-id` path never moves.
+
+If you set `port:` and that device is not there, Nocturne **stops** and names
+the path. It will not quietly fall back to searching, because that would hide a
+cable moved to the wrong socket.
+
+While you are in this file, check `indi_device_name` a few lines above:
+
+```yaml
+mount:
+  indi_device_name: "EQMod Mount"
+```
+
+That is the name the *driver* calls the mount, not the name you call it. It is
+almost certainly right. If the bench test later says no device by that name
+appeared, it will print the names indiserver is actually offering, and you put
+the right one here.
 
 Save with `Ctrl+O`, `Enter`, then `Ctrl+X`.
 
