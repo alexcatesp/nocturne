@@ -231,6 +231,9 @@ class TestGovernorDoesNotMutateConfiguration:
 
     def test_governor_exposes_no_setter_for_limits(self, governor: SafetyGovernor) -> None:
         public = [name for name in dir(governor) if not name.startswith("_")]
+        # Positive control: an empty list would satisfy the assertion below
+        # while inspecting nothing at all (CLAUDE.md section 2).
+        assert "validate" in public, public
         assert not [name for name in public if name.startswith("set_")]
 
     def test_governor_config_is_frozen(self, governor: SafetyGovernor) -> None:

@@ -53,11 +53,26 @@ class TestShippedFile:
         assert site.elevation_m == pytest.approx(PLACEHOLDER_ELEVATION_M)
         assert site.is_placeholder
 
+    #: Fragments of the reference rig's real coordinates. None may reach the file.
+    LEAKED_COORDINATES = ("41.58", "-4.58", "4.5814")
+
     def test_no_real_site_coordinates_are_shipped(self, config_dir: Path) -> None:
         """The regression this class exists for. Checked on the file, not the model."""
         text = (config_dir / "equipment.yaml").read_text(encoding="utf-8")
-        for leaked in ("41.58", "-4.58", "4.5814"):
+        assert "site:" in text, "the file was not read; this test proves nothing"
+        for leaked in self.LEAKED_COORDINATES:
             assert leaked not in text, f"{leaked} is a real observing site"
+
+    def test_the_leak_check_would_catch_a_leak(self) -> None:
+        """Positive control — CLAUDE.md section 2.
+
+        The test above passes by finding nothing, and finding nothing is also
+        what a broken check does. This runs the same predicate over a file that
+        does contain the coordinates, and requires every fragment to be caught.
+        """
+        leaked_file = "site:\n  latitude: 41.5806\n  longitude: -4.5814\n"
+        caught = [fragment for fragment in self.LEAKED_COORDINATES if fragment in leaked_file]
+        assert sorted(caught) == sorted(self.LEAKED_COORDINATES)
 
     def test_imaging_camera_matches_asi533mm_pro(self, config_dir: Path) -> None:
         camera = load_equipment_config(config_dir / "equipment.yaml").imaging_camera
@@ -395,10 +410,19 @@ class TestMountSerialPort:
         mount = load_equipment_config(config_dir / "equipment.yaml").mount
         assert mount.port is None
 
+    #: The reference mount's own serial number, which is nobody else's.
+    LEAKED_SERIAL = "8F8B50B10E31"
+
     def test_the_shipped_config_carries_nobody_s_serial_number(self, config_dir: Path) -> None:
         """Checked on the file, not the model: a comment would leak it too."""
         text = (config_dir / "equipment.yaml").read_text(encoding="utf-8")
-        assert "8F8B50B10E31" not in text
+        assert "mount:" in text, "the file was not read; this test proves nothing"
+        assert self.LEAKED_SERIAL not in text
+
+    def test_the_serial_number_check_would_catch_a_leak(self) -> None:
+        """Positive control — CLAUDE.md section 2."""
+        leaked_file = f"  port: /dev/serial/by-id/usb-X_{self.LEAKED_SERIAL}-if00\n"
+        assert self.LEAKED_SERIAL in leaked_file
 
     def test_the_shipped_default_is_not_ttyusb(self, config_dir: Path) -> None:
         """The regression this class exists for."""

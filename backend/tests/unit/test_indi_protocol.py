@@ -329,7 +329,15 @@ class TestSerialisation:
 
     def test_attribute_values_are_escaped(self) -> None:
         payload = new_vector(PropertyKind.TEXT, device='D"><evil', name="P", values={"E": "v"})
+        # Positive control: an empty payload would pass the absence check alone.
+        assert b"newTextVector" in payload
         assert b'"><evil' not in payload
+        # The angle brackets are what would break out of the attribute, and they
+        # are escaped. The double quote is left literal because quoteattr wraps
+        # the value in single quotes instead — also safe, and worth pinning down
+        # so a change of quoting style is noticed rather than assumed.
+        assert b"&gt;&lt;evil" in payload
+        assert b"device='D" in payload
 
     def test_new_vector_round_trips_through_the_parser(self) -> None:
         payload = new_vector(PropertyKind.NUMBER, device="D", name="P", values={"E": 12.5})
@@ -403,4 +411,6 @@ class TestPropertyValueAccess:
                 values={"NOT_A_REAL_ELEMENT": 1.0},
             )
         )
+        # Positive control: an empty element map would pass on its own.
+        assert set(updated.elements), "the property lost every element"
         assert "NOT_A_REAL_ELEMENT" not in updated.elements
