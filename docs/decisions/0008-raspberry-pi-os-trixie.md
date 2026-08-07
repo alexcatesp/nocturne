@@ -1,6 +1,8 @@
 # 0008 — Raspberry Pi OS Trixie, not Bookworm
 
 Status: Accepted · 2026-08-05 · Milestone M1
+Premise confirmed by measurement on the reference rig, 2026-08-07 — see
+Consequences.
 Supersedes the OS row of SPEC section 4, which named Bookworm.
 
 ## Context
@@ -75,10 +77,27 @@ KF6 is needed.
   the INDI client stays for reasons that do not depend on the interpreter.
 - `apt-cache policy libindi-dev` on Trixie is now worth checking (ADR 0006): if
   Debian 13 ships INDI 2.2.3 or later, most of the source build can be dropped.
-- **The Qt6/KF6 package names in `install.sh` are unverified.** The environment
-  this was written in is Ubuntu 24.04 with no KF6 packages at all, and Debian's
-  package APIs are unreachable from it. The names come from KStars' documented
-  Qt6/KF6 build requirements. This is why the preflight distinguishes "unknown
-  to apt" from "not yet installed" — a wrong name is reported by name, in
-  seconds, with the `apt-cache search` command to find the right one, and
-  nothing has been built by then.
+- **The premise of this ADR is now measured, not assumed.** Checked on the
+  reference rig running Trixie, **2026-08-07**, all from `trixie/main`, arm64:
+
+  ```
+  qt6-base-dev              6.8.2+dfsg-9+deb13u2
+  extra-cmake-modules       6.13.0-1
+  libkf6config-dev          6.13.0-2
+  libkf6i18n-dev            6.13.0-1
+  libkf6widgetsaddons-dev   6.13.0-1
+  ```
+
+  Packaged KF6 6.13 and Qt6 6.8 are present and installable with no source
+  build. That is exactly what Bookworm cannot supply, which is the whole reason
+  this decision exists — so the reasoning above is confirmed by observation
+  rather than resting on the release notes.
+
+- **Those five are a sample, not the list.** `QT6_BUILD_PACKAGES` and
+  `KF6_BUILD_PACKAGES` hold twenty-four names between them; nineteen remain
+  unverified against Trixie, and one wrong name stops an install. The preflight
+  already sorts every name into installed / available / unknown-to-apt, so a
+  wrong one is reported by name in seconds rather than an hour into a build.
+  `./scripts/install.sh --check-packages` answers the same question on demand,
+  printing only the names apt does not recognise and nothing at all if the list
+  is clean.

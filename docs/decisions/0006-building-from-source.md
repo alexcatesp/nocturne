@@ -150,20 +150,37 @@ with no `v3.6.x` or `v3.7.x` — was reading a real absence and drawing the wron
 conclusion from it. The tags are not missing from the mirror; they were never
 cut.
 
-`invent.kde.org` remains unreachable from the development environment
-(`CONNECT tunnel failed, response 403`, re-checked 2026-08-07), so the pin below
-was supplied by the operator from a machine that can reach KDE and is recorded
-on that authority. It has not been independently verified from here, and that is
-stated rather than glossed.
-
 ```
-KSTARS_REF    = 61d849b04c42217cf2f0ab956153e56a928ae8a8   # head of stable-3.8.3
+KSTARS_REF    = 61d849b04c42217cf2f0ab956153e56a928ae8a8
 KSTARS_BRANCH = stable-3.8.3
 ```
 
-3.8.3 was released 1 June 2026 (kstars.kde.org). A `stable-3.8.4` branch exists
-(head `e6d2161c5e6daa0e75aa364901473f05ccc8c160`) but corresponds to no announced
-release, so it is not used.
+**Provenance: first-hand, from the origin.** This is `refs/heads/stable-3.8.3`
+as `git ls-remote --heads` reported it when run against `invent.kde.org`
+directly, on the Pi, **captured 2026-08-07**. It is not a value read off a
+mirror, inferred from a release page, or relayed second-hand — it came from the
+authoritative remote. `invent.kde.org` remains unreachable from the development
+environment (`CONNECT tunnel failed, response 403`, re-checked the same day),
+which is why the capture happened on the Pi rather than here.
+
+**What this pin is, precisely.** It is *the state of the 3.8.3 stable line at the
+moment it was captured* — **not** the 3.8.3 release tree. Those differ. KStars
+3.8.3 was released 1 June 2026; `stable-3.8.3` is a maintenance branch and may
+have taken post-release fixes since. There is no tag marking the release point,
+so there is nothing to pin to that would mean "the release" instead.
+
+That is almost certainly what is wanted — stable-line fixes on top of a release
+are the reason the branch exists — but the distinction is recorded here rather
+than left as an ambiguity behind the label "3.8.3", because the two readings
+diverge the moment anyone asks "is this the released 3.8.3?". The answer is no:
+it is 3.8.3 plus whatever the maintainers had added by 2026-08-07.
+
+The capture date is therefore part of the pin, not metadata about it. Re-taking
+the SHA later gives a different tree and needs a new date beside it.
+
+A `stable-3.8.4` branch exists (head
+`e6d2161c5e6daa0e75aa364901473f05ccc8c160`, same capture) but corresponds to no
+announced release, so it is not used.
 
 The version matters beyond currency: the Optical Trains DBus interface that the
 executor bridge targets arrived in **3.8.2**. Building an older release would
@@ -206,11 +223,11 @@ loudly and records the branch name in the lock file.
   interrupted build resumes; and it is a one-off per machine, not per session.
 - Upgrading INDI is an edit to one variable at the top of the installer,
   followed by a rebuild — deliberate, not incidental.
-- **KStars is pinned to a commit taken on the operator's authority.** It has not
-  been verified from the development environment, which cannot reach KDE. If the
-  commit is wrong, the build produces the wrong KStars silently — the guard
-  confirms HEAD *is* that commit, not that the commit *is* 3.8.3. The first
-  thing to check if Ekos behaves oddly is `kstars --version` against 3.8.3.
+- **The KStars pin is a branch head with a date, not a release.** The guard
+  confirms HEAD *is* that commit; nothing confirms that commit *is* the 3.8.3
+  release, because it is not — it is the 3.8.3 line as of 2026-08-07. Running
+  `kstars --version` after the build is what ties the built tree back to a
+  version number, and the installation guide states the expected output.
 - Pinning to a branch head means a future `stable-3.8.3` commit — a backport, a
   translation update — breaks the build until the pin is re-taken. That is the
   intended behaviour and the error says so, but it is a maintenance cost that a

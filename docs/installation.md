@@ -436,21 +436,69 @@ focuser should report an absolute position and a temperature.
 
 *This section is provisional — KStars has not yet been built on the reference rig.*
 
-Confirm the Qt6 and KF6 development packages exist before starting:
+### 10.1 Check every package name first
+
+One command, and it checks all twenty-four names the build needs:
 
 ```bash
-apt-cache policy qt6-base-dev extra-cmake-modules libkf6config-dev
+./scripts/install.sh --check-packages
 ```
 
-If any of these is unknown to apt, stop. Either the OS is not Trixie or the package names
-differ for this release — resolve that first rather than discovering it an hour into a
-compile.
+It prints the names apt does not recognise, one per line, and **prints nothing if the
+list is good**. Silence is the answer you want. If it does print something, stop: either
+the OS is not Trixie, or those names differ on this release. Resolve it now rather than
+an hour into a compile.
 
-Then build StellarSolver 2.8, followed by KStars 3.8.3. **KStars 3.8.2 or later is
-required**: it introduced the Optical Trains DBus interface that Nocturne's executor
-targets.
+Verified present on the reference rig, 2026-08-07, all from `trixie/main`, arm64:
+
+```
+qt6-base-dev              6.8.2+dfsg-9+deb13u2
+extra-cmake-modules       6.13.0-1
+libkf6config-dev          6.13.0-2
+libkf6i18n-dev            6.13.0-1
+libkf6widgetsaddons-dev   6.13.0-1
+```
+
+No source build of Qt6 or KF6 is needed. That is the whole reason this guide requires
+Trixie — see `docs/decisions/0008-raspberry-pi-os-trixie.md`.
+
+### 10.2 Build
+
+StellarSolver 2.8 first, then KStars. **KStars 3.8.2 or later is required**: it
+introduced the Optical Trains DBus interface that Nocturne's executor targets.
+
+KStars is pinned to a **commit**, not a tag, because KStars does not tag modern
+releases — its tags stop at `v17.08.3`. The installer pins
+`61d849b04c42217cf2f0ab956153e56a928ae8a8`, the head of `stable-3.8.3` as of
+2026-08-07. That is the 3.8.3 stable *line* at that date, which is 3.8.3 plus any
+post-release fixes — not the release tree itself. See ADR 0006.
 
 Expect this to be the longest build of the installation.
+
+### 10.3 Verify what you actually built
+
+```bash
+kstars --version
+```
+
+**Expected:**
+
+```
+kstars 3.8.3
+```
+
+The exact string may carry a build suffix; the part that matters is **`3.8.3`**.
+
+- If it reports **3.8.2 or higher**, the Optical Trains interface is present and Nocturne
+  can drive Ekos.
+- If it reports **3.6.x**, you are running Debian's packaged KStars and the source build
+  did not take, or was not first on `PATH`. Check with `command -v kstars`.
+- If it reports **anything below 3.8.2**, stop. Nothing Ekos-dependent will work
+  correctly, and it will fail in ways that look like Nocturne bugs.
+
+This check is the only thing tying the built tree back to a version number: the installer
+verifies it checked out the commit it was told to, but nothing in it can confirm that
+commit *is* 3.8.3. That is what this command is for.
 
 ---
 
