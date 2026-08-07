@@ -107,60 +107,101 @@ is now verified against the hardware.
 
 Re-check it if the KStars pin ever moves — it is a property of the build, not of DBus.
 
-### 3b. The whole object tree, before Ekos is started
+### 3b. `--recurse` does not do what it looks like it does
+
+**Do not use `--xml` and `--recurse` together.** They do not compose: `--xml` prints the
+introspection of the *one* object it was given, and `--recurse` only affects the
+human-readable output mode. Asking for both silently gives you the first.
+
+That was found the slow way. On the reference rig, 2026-08-07:
 
 ```bash
 gdbus introspect --session --dest org.kde.kstars --object-path / --recurse --xml \
-  > kstars-at-rest.xml
-wc -c kstars-at-rest.xml
-grep -c '<method name=' kstars-at-rest.xml
+  > kstars-at-rest.xml     # 570 bytes, 3 methods
 ```
 
-**Expected:** tens of kilobytes and well over a hundred methods.
+570 bytes reads like a failure and is not one — it is the root node's own XML, correctly
+returned, carrying `Introspect`, `Ping`, `GetMachineId` and **two child nodes**:
 
-**Observed on the reference rig, 2026-08-07: 570 bytes and 3 methods.** The recursion did
-not descend — three methods is `Introspect`, `Ping` and `GetMachineId`, which is what the
-root node answers when it advertises no children. `--recurse` walks `<node name="…"/>`
-entries, and there were none to walk. Do not conclude that KStars publishes nothing; it
-means `/` is not a route to what it publishes. Go to 3c.
-
-### 3c. When `/` says nothing — enumerate the paths instead
-
-```bash
-busctl --user tree org.kde.kstars > dbus-tree.txt; cat dbus-tree.txt
+```xml
+<node name="KStars"/>
+<node name="kstars"/>
 ```
 
-`busctl` walks the tree itself rather than trusting one node to describe it. If that lists
-object paths, introspect each of them directly:
+The children were advertised the whole time. Nothing was wrong with KStars, with the bus
+or with the root node; the command asked for one object and got one object. Enumerate the
+paths and introspect each of them — 3c.
+
+### 3c. Enumerate the paths, then introspect each one
 
 ```bash
-grep -o '^ *[|`]*-*/.*' dbus-tree.txt | tr -d ' |`-' | sort -u > object-paths.txt
-while read -r path; do
-  echo "=== ${path}"
+busctl --user tree org.kde.kstars
+```
+
+**Observed at rest** — Ekos *not* started — with the `/kstars/MainWindow_1/actions/…`
+branch elided, because it is several hundred KXMLGui menu-action objects and none of them
+is an interface Nocturne would ever call:
+
+```
+├─ /KStars
+│ ├─ /KStars/Ekos
+│ │ └─ /KStars/Ekos/Scheduler
+│ ├─ /KStars/FOV/1 … /5
+│ ├─ /KStars/INDI
+│ └─ /KStars/SimClock
+└─ /kstars
+  └─ /kstars/MainWindow_1/actions/…      (menu actions — ignore)
+```
+
+**Note what is absent.** No `/KStars/Ekos/Capture`, `/Focus`, `/Guide`, `/Align`,
+`/Mount` or optical-train object. Those are created when Ekos is *started*, which is why
+this procedure has two passes rather than one. `Scheduler` existing at rest is the
+exception, not the pattern.
+
+```bash
+for path in /KStars /KStars/Ekos /KStars/Ekos/Scheduler /KStars/INDI /KStars/SimClock; do
+  echo "===== ${path}"
   gdbus introspect --session --dest org.kde.kstars --object-path "${path}" --xml
-done < object-paths.txt > kstars-objects.xml
-grep -c '<method name=' kstars-objects.xml
+done > kstars-live-at-rest.xml
+grep -c '<method name=' kstars-live-at-rest.xml
 ```
 
-If `busctl` lists nothing either, try the paths KStars is expected to use, and let the
-failures tell you which are real:
-
-```bash
-for path in /KStars /kstars /KStars/INDI /KStars/Ekos /KStars/Ekos/Scheduler; do
-  echo "=== ${path}"
-  gdbus introspect --session --dest org.kde.kstars --object-path "${path}" --xml 2>&1 | head -3
-done
-```
-
-### 3d. The source tree says the same thing, and does not need a running KStars
+### 3d. The source tree declares the same interfaces, and needs no running KStars
 
 KStars generates its DBus adaptors from interface XML checked into the repository. Those
 files *are* the interface definition, in the format wanted here, and they are on the Pi
-already:
+already — **nineteen of them**, found at the pinned commit on 2026-08-07 under
+`~/.cache/nocturne-build/kstars/kstars/`:
+
+```
+org.kde.kstars.xml                        org.kde.kstars.INDI.xml
+org.kde.kstars.Ekos.xml                   org.kde.kstars.INDI.Dome.xml
+org.kde.kstars.Ekos.Align.xml             org.kde.kstars.INDI.DustCap.xml
+org.kde.kstars.Ekos.Capture.xml           org.kde.kstars.INDI.GenericDevice.xml
+org.kde.kstars.Ekos.Focus.xml             org.kde.kstars.INDI.LightBox.xml
+org.kde.kstars.Ekos.Guide.xml             org.kde.kstars.INDI.PAC.xml
+org.kde.kstars.Ekos.Mount.xml             org.kde.kstars.INDI.Weather.xml
+org.kde.kstars.Ekos.Observatory.xml       org.kde.kstars.FOV.xml
+org.kde.kstars.Ekos.OpticalTrain.xml      org.kde.kstars.SimClock.xml
+org.kde.kstars.Ekos.Scheduler.xml
+```
+
+**`org.kde.kstars.Ekos.OpticalTrain.xml` is there.** That is the interface ADR 0008 and
+ADR 0006 both cite as the reason for requiring KStars >= 3.8.2 — now confirmed present in
+the tree that was actually built, rather than taken from release notes.
+
+To collect them into one file to send back:
 
 ```bash
-find ~/.cache/nocturne-build/kstars -name '*.xml' \
-  \( -name 'org.kde.kstars*' -o -path '*dbus*' \) | sort
+cd ~/.cache/nocturne-build/kstars/kstars
+for f in org.kde.kstars*.xml; do echo "===== $f"; cat "$f"; done \
+  > ~/ekos-capture/kstars-dbus-interfaces.xml
+```
+
+To re-derive the list on a different build:
+
+```bash
+find ~/.cache/nocturne-build/kstars -name 'org.kde.kstars*.xml' | sort
 ```
 
 This is evidence of the same kind as an introspection dump — generated from the tree that
@@ -237,11 +278,17 @@ ls -la ekos-capture.tar.gz
 
 | File | Why |
 |---|---|
-| `kstars-at-rest.xml` | **the essential one** — every object and method KStars publishes |
+| `kstars-dbus-interfaces.xml` | **the essential one** — all nineteen declared interfaces, from the built tree (3d) |
+| `kstars-live-at-rest.xml` | what is actually exported before Ekos starts (3c) |
 | `kstars-ekos-running.xml` | the Ekos modules, if step 4 worked |
 | `dbus-names.txt` | whether the bus name is fixed or per-process |
 | `kstars-version.txt` | ties the capture to a build |
 | `kstars.log` | says why, when something did not work |
+
+The first two answer different questions and are both wanted. The source XML is what
+KStars **declares**; the live introspection is what it **exports at that moment**. A
+method in the first and not the second is not a contradiction — it is an object that has
+not been created yet — but a method in neither is a guess in `ekos.py` that has to go.
 
 They go into `backend/tests/fixtures/hardware/`, alongside the INDI property dumps, and
 get the same standing: recorded from the machine, not written by the author of the code
