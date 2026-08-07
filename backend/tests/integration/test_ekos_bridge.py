@@ -2,8 +2,13 @@
 
 Connect, disconnect, drive Ekos, and recover when KStars leaves the bus and
 comes back. Run against a stub service on a private session bus; see
-``tests/fixtures/fake_kstars`` for why, and the M1 HITL procedure for how the
-real KStars surface is confirmed.
+``tests/fixtures/fake_kstars`` for why.
+
+What this file does **not** establish is that the stub resembles KStars. That is
+``tests/unit/test_ekos_recorded_interface.py``, which checks both the bridge and
+the stub against the interface recorded from the rig — and which exists because
+this file was fully green while the bridge called ``INDI.connect`` with a device
+name (issue #2).
 """
 
 from __future__ import annotations
@@ -123,11 +128,35 @@ class TestCalls:
         assert "Telescope Simulator" in devices
         assert len(devices) == 5
 
-    async def test_connect_one_device(self, bridge: EkosBridge, kstars: FakeKStars) -> None:
-        await bridge.connect_device("Focuser Simulator")
-        assert kstars.indi.connected == {"Focuser Simulator"}
-        await bridge.disconnect_device("Focuser Simulator")
-        assert kstars.indi.connected == set()
+    async def test_attaches_to_an_indiserver(
+        self, bridge: EkosBridge, kstars: FakeKStars
+    ) -> None:
+        """``INDI.connect`` takes a host and a port, not a device name.
+
+        This test used to be ``test_connect_one_device`` and passed a device
+        name, because both the bridge and the stub believed the same wrong
+        thing. The recorded interface says
+        ``connect(host: s, port: i) -> b`` (issue #2).
+        """
+        assert await bridge.connect_indiserver("localhost", 7624) is True
+        assert kstars.indi.servers == {("localhost", 7624)}
+
+        assert await bridge.disconnect_indiserver("localhost", 7624) is True
+        assert kstars.indi.servers == set()
+
+    async def test_there_is_no_per_device_connect_on_the_bridge(
+        self, bridge: EkosBridge
+    ) -> None:
+        """The positive control for the correction above.
+
+        If ``connect_device`` ever comes back, it is the old misconception
+        returning: ``org.kde.kstars.INDI`` has no per-device connect, and the
+        one Nocturne uses is the governed ``CONNECTION`` write in
+        ``IndiClient`` — not anything on this bridge.
+        """
+        assert not hasattr(bridge, "connect_device")
+        assert not hasattr(bridge, "disconnect_device")
+        assert hasattr(bridge, "connect_indiserver")
 
     async def test_calling_while_disconnected_is_refused(self, bus_address: str) -> None:
         bridge = EkosBridge(bus_type=BusType.SESSION, bus_address=bus_address)

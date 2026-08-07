@@ -220,8 +220,19 @@ Ekos creates its per-module DBus objects — capture, focus, guide, align, mount
 and the optical trains — **when Ekos is started**, not when KStars is. So the file from
 step 3b does not contain them, and the second capture is the one that has them.
 
-Starting Ekos needs a method name, and the method names are exactly what is unverified
-here. So this step may fail, and that is an acceptable outcome:
+**The method names below are no longer guesses.** They were read out of the capture from
+step 3c: `org.kde.kstars.Ekos` declares `getProfiles() -> as`, `setProfile(s) -> b` and
+`start()`, and `start` is annotated NoReply — it returns immediately and says nothing.
+
+Ask which profiles exist rather than assuming one is called `Simulators`:
+
+```bash
+gdbus call --session --dest org.kde.kstars --object-path /KStars/Ekos \
+  --method org.kde.kstars.Ekos.getProfiles
+```
+
+**Pick a simulator profile from what that prints.** If there is no simulators profile,
+stop and say so — do not select the profile that holds the real equipment.
 
 ```bash
 gdbus call --session --dest org.kde.kstars --object-path /KStars/Ekos \
@@ -231,36 +242,55 @@ gdbus call --session --dest org.kde.kstars --object-path /KStars/Ekos \
   --method org.kde.kstars.Ekos.start
 ```
 
-**If either says `No such method` or `No such interface`** — stop, do not experiment.
-`kstars-at-rest.xml` already contains the real names, and I will read them out of it and
-send you back the exact two commands. That is one round trip and it is the correct one:
-guessing at method names on a live rig is how something gets commanded by accident.
+`setProfile` returns `(true,)` on success and `(false,)` if the name is not a profile —
+**check it**, because `start` will happily start whatever profile is currently selected.
 
-**If they succeed,** give the modules a moment and capture again:
+`start` returns nothing at all, so ask Ekos whether it came up rather than assuming:
+
+```bash
+gdbus call --session --dest org.kde.kstars --object-path /KStars/Ekos \
+  --method org.freedesktop.DBus.Properties.Get org.kde.kstars.Ekos ekosStatus
+```
+
+Then give the modules a moment and capture again:
 
 ```bash
 sleep 20
-gdbus introspect --session --dest org.kde.kstars --object-path / --recurse --xml \
-  > kstars-ekos-running.xml
-busctl --user tree org.kde.kstars | grep -i -E 'ekos|train' | head -40
+busctl --user tree org.kde.kstars | grep -i -E 'ekos|train'
 ```
 
-**Expected:** `kstars-ekos-running.xml` is substantially larger than `kstars-at-rest.xml`,
-and the tree lists objects under `/KStars/Ekos/`. An **optical train** object or interface
-appearing anywhere in that output is the thing ADR 0008 justified the whole Trixie
-decision for — if you see one, say so.
+Introspect each path that appears — **not** `/` with `--recurse`, for the reason in 3b:
+
+```bash
+busctl --user tree org.kde.kstars | tr -d ' |`-' | grep '^/KStars' | sort -u \
+  > ekos-paths.txt
+while read -r path; do
+  echo "===== ${path}"
+  gdbus introspect --session --dest org.kde.kstars --object-path "${path}" --xml
+done < ekos-paths.txt > kstars-ekos-running.xml
+grep -c '<method name=' kstars-ekos-running.xml
+```
+
+**Expected:** paths under `/KStars/Ekos/` that were absent at rest — `Capture`, `Focus`,
+`Guide`, `Align`, `Mount`. An **optical train** object appearing there is the thing ADR
+0008 justified the whole Trixie decision for; its interface is declared in the built tree
+already, and this would be it exported.
 
 ---
 
 ## 5. Shut down cleanly
 
 ```bash
-gdbus call --session --dest org.kde.kstars --object-path /KStars \
-  --method org.kde.kstars.KStars.quit 2>/dev/null || pkill -TERM kstars
+pkill -TERM kstars
 sleep 5
 pgrep -a kstars || echo "stopped"
 exit          # leaves the dbus-run-session shell; the private bus goes with it
 ```
+
+A signal, not a DBus call. An earlier version of this document said
+`org.kde.kstars.KStars.quit`, and the capture shows there is no such interface: `/KStars`
+carries `org.kde.kstars` and `org.kde.KMainWindow`, and neither declares `quit`. It was a
+guess of exactly the kind this whole procedure exists to remove.
 
 `exit` is not optional housekeeping — the session bus lives only as long as that shell,
 and leaving it open leaves a KStars running.

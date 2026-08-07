@@ -175,10 +175,10 @@ reports. The full stack is built and installed on the Pi: INDI 2.2.4, the three
 third-party components (`libasi`, `indi-asi`, `indi-eqmod`), StellarSolver 2.8 and
 **KStars 3.8.3**. `install.sh` has run end to end and `--check` passes clean.
 
-Everything learned is in [`docs/FIELD-NOTES-M1.md`](docs/FIELD-NOTES-M1.md), in three
-parts: the mount, the four remaining devices, and the build. It is evidence rather than
-instruction — where it contradicts this file, SPEC.md or an ADR, the contradiction is the
-point, and in part three it contradicts ADR 0008.
+Everything learned is in [`docs/FIELD-NOTES-M1.md`](docs/FIELD-NOTES-M1.md), in four
+parts: the mount, the four remaining devices, the build, and the Ekos DBus interface. It
+is evidence rather than instruction — where it contradicts this file, SPEC.md or an ADR,
+the contradiction is the point, and in part three it contradicts ADR 0008.
 
 **Done, against simulators.** Config schemas, the INDI client, the Ekos DBus bridge, the
 safety governor skeleton, the device bring-up mechanism (`executor/link.py` — one
@@ -187,17 +187,19 @@ mypy --strict, shellcheck, pytest against real simulator drivers).
 
 **Outstanding for M1.** Nothing.
 
-**The next thing, and it is not M2.** [Issue #2](https://github.com/alexcatesp/nocturne/issues/2):
-every Ekos DBus method name in `executor/ekos.py` is a guess made without a KStars to
-ask, and `fake_kstars.py` is a stub that shares the bridge's assumptions. KStars now
-exists on the rig, so the interface can be read rather than guessed.
-[`docs/ekos-dbus-capture.md`](docs/ekos-dbus-capture.md) is the capture procedure; its
-output belongs in `backend/tests/fixtures/hardware/` with the same standing as the INDI
-property dumps. Replacing guesses with recorded evidence is M1 closing work. *Using* the
-interface — align, focus, guide, capture, flip — is M2 and does not start.
+**The Ekos DBus interface is recorded, not guessed** (issue #2, field notes part four).
+`kstars-dbus-interfaces.xml` and `kstars-live-at-rest.xml` are in
+`backend/tests/fixtures/hardware/` with the same standing as the INDI property dumps, and
+`test_ekos_recorded_interface.py` checks every constant in `executor/ekos.py` — and every
+signature in `fake_kstars.py` — against them. One guess was wrong:
+`org.kde.kstars.INDI.connect` is `connect(host, port)` and attaches to an indiserver, so
+`connect_device()` was calling the wrong method with the wrong arity while every test
+passed, because the stub shared the misconception. It is now `connect_indiserver()`.
+*Using* the Ekos modules — align, focus, guide, capture, flip — is M2 and does not start;
+their objects do not exist until Ekos is started and none has been introspected live.
 
 **Known limitations, each with a red test or a tracked issue.** `SetProperty` is
 ungated, so a raw property write can still slew the mount (ADR 0007, issue #1, three
-`xfail(strict=True)` tests). The Ekos DBus method names are guesses (issue #2). The
-semantics of `RASTATUS.RARunning` are unknown, and a structural test forbids the name
-appearing in the package until they are established (issue #3).
+`xfail(strict=True)` tests). The semantics of `RASTATUS.RARunning` are unknown, and a
+structural test forbids the name appearing in the package until they are established
+(issue #3).

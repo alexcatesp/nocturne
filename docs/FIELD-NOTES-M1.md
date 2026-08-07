@@ -630,3 +630,135 @@ tree is at `~/.cache/nocturne-build/kstars`.
 The capture procedure is `docs/ekos-dbus-capture.md`. Its output belongs in
 `backend/tests/fixtures/hardware/`, and `fake_kstars.py` gets rebuilt from it
 rather than from assumptions.
+
+---
+---
+
+# Field Notes — M1, part four: the Ekos DBus interface
+
+**Captured 2026-08-07, on the reference rig, against the KStars 3.8.3 that was just
+built.** The capture is the operator's; the reading of it is not evidence and is
+marked where it appears. Procedure and its corrections: `docs/ekos-dbus-capture.md`.
+
+Fixtures: `backend/tests/fixtures/hardware/kstars-dbus-interfaces.xml` (nineteen
+adaptor definitions from the built tree) and `kstars-live-at-rest.xml` (five object
+paths introspected from the running process).
+
+---
+
+## 21. HEADLINE: the bridge was calling the wrong method, and every test passed
+
+[Issue #2](https://github.com/alexcatesp/nocturne/issues/2) existed because every
+DBus name in `executor/ekos.py` was written from expectation. Six of the seven were
+right. **One was wrong, and it was wrong in a way nothing could have caught.**
+
+```
+org.kde.kstars.INDI.connect(host: s, port: i) -> b
+```
+
+It attaches KStars' INDI **client** to an **indiserver**. The bridge had:
+
+```python
+async def connect_device(self, device: str) -> None:
+    await self._call(self._indi, "connect", device)
+```
+
+One string, to a method wanting a string and an int32, for an operation that is not
+the one the name claims. **There is no per-device connect on that interface at all.**
+Devices are connected for the whole profile by `Ekos.connectDevices()`, or one at a
+time by writing `CONNECTION` through `IndiClient` — which is the path the safety
+governor gates, and this was not.
+
+`fake_kstars.py` declared `connect(device: "s")`. So the stub agreed with the bridge,
+`test_ekos_bridge.py` was entirely green, and the two had never been compared to
+anything outside themselves. **A stub written by the author of the code it verifies
+proves the two are consistent and nothing more** — the docstring said as much, and
+the file was still green.
+
+It is now `connect_indiserver(host, port)`, and
+`backend/tests/unit/test_ekos_recorded_interface.py` checks the bridge *and* the stub
+against the recorded XML. Six mutations were applied to confirm those tests bite:
+restoring the old stub signature, restoring the old bridge call, corrupting
+`EKOS_PATH`, corrupting `INDI_INTERFACE`, inventing a required method, and disarming
+the fixture's section parser. Each went red.
+
+---
+
+## 22. What was verified, name by name
+
+Everything else the bridge names was correct:
+
+| Constant | Value | Confirmed by |
+|---|---|---|
+| bus name | `org.kde.kstars` | `ListNames` — **and no per-process `org.kde.kstars-<pid>`** |
+| `EKOS_PATH` | `/KStars/Ekos` | exported, live |
+| `EKOS_INTERFACE` | `org.kde.kstars.Ekos` | exported, live |
+| `INDI_PATH` | `/KStars/INDI` | exported, live |
+| `INDI_INTERFACE` | `org.kde.kstars.INDI` | exported, live |
+| `start` `stop` `connectDevices` `disconnectDevices` | all present, all void, all NoReply | declared and exported |
+| `getDevices` | `() -> as` | declared and exported |
+
+The bus name was a real question rather than a formality. Some Qt applications
+register only a per-process name; a KStars that did would make the bridge fail in a
+way that reads as "KStars is not running". It does not, and that is now a test.
+
+The declared XML and the live introspection agree method-for-method on both objects,
+which is worth knowing: it means the source tree can be trusted for the modules that
+were not running.
+
+---
+
+## 23. What the object tree looks like at rest
+
+```
+/KStars              org.kde.kstars, org.kde.KMainWindow
+/KStars/Ekos         org.kde.kstars.Ekos
+/KStars/Ekos/Scheduler
+/KStars/INDI         org.kde.kstars.INDI
+/KStars/SimClock
+/KStars/FOV/1 … /5
+/kstars/MainWindow_1/actions/…    several hundred KXMLGui menu actions
+```
+
+**No `Capture`, `Focus`, `Guide`, `Align` or `Mount` object exists before Ekos is
+started.** Their interfaces are declared in the built tree; the objects are created
+when Ekos starts. `Scheduler` existing early is the exception, not the pattern.
+
+`org.kde.kstars.Ekos.OpticalTrain` **is declared** — the interface ADR 0006 and ADR
+0008 both cite as the reason for requiring KStars >= 3.8.2, now confirmed in the tree
+that was actually built rather than taken from release notes. Nothing uses it. Using
+it is M2.
+
+---
+
+## 24. Three things the procedure got wrong, and they are the same mistake
+
+Recorded because the capture document is itself a place guesses hide.
+
+1. **`gdbus introspect --xml --recurse` does not recurse.** `--xml` dumps the one
+   object it was given; `--recurse` only affects the human-readable mode. The 570-byte
+   result read like a failure and was a correct answer to a different question. The
+   diagnosis written at the time — "the root advertised no children" — was also wrong:
+   it advertised two.
+2. **`org.kde.kstars.KStars.quit` does not exist.** `/KStars` carries `org.kde.kstars`
+   and `org.kde.KMainWindow`, and neither declares `quit`. The shutdown step now sends
+   a signal.
+3. **`Ekos.start` returns nothing.** It is annotated NoReply, so a successful call
+   proves only that the message was accepted. `ekosStatus` is what says whether Ekos
+   came up.
+
+All three are the same error as the `connect` one: a plausible name, written down
+without asking, in a document about not doing that.
+
+---
+
+## 25. What is still not recorded
+
+The Ekos module objects have never been introspected live, because Ekos was not
+started during this capture. Their interfaces are declared, so they are unstarted
+rather than unknown — but the distinction matters the moment M2 calls one.
+
+Step 4 of `docs/ekos-dbus-capture.md` now carries verified commands for that
+(`getProfiles`, `setProfile`, `start`, then per-path introspection). It is not needed
+to close issue #2: nothing in `ekos.py` references those modules, and adding
+references is M2.

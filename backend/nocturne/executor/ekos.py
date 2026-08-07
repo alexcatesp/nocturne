@@ -5,19 +5,35 @@ session bus as ``org.kde.kstars``. Nocturne drives it from here rather than
 reimplementing polar alignment, autofocus, guiding and meridian handling
 (SPEC section 3, rationale for Ekos as executor).
 
-**On method names — THESE ARE UNVERIFIED.** Every path, interface and method
-name below was written from expectation, not read from a live KStars. The DBus
-surface is not a published stable contract and has moved between releases.
+**On method names — THESE ARE NOW VERIFIED.** Every path, interface and method
+name below was read off the reference rig on 2026-08-07, running KStars 3.8.3
+(commit ``61d849b0``), and is recorded in
+``backend/tests/fixtures/hardware/kstars-dbus-interfaces.xml`` and
+``kstars-live-at-rest.xml``. ``test_ekos_recorded_interface.py`` asserts that
+every constant here appears in those files, so a name that drifts from the
+recorded interface fails in CI rather than at two in the morning
+(https://github.com/alexcatesp/nocturne/issues/2).
 
-The bridge introspects the remote objects when it connects and refuses to start
-if what it needs is absent, naming what it wanted and what it found. That is
-*containment*: a wrong name becomes a loud startup failure instead of a call
-that silently does nothing at two in the morning. **It is not verification.**
+**One of the guesses was wrong, and it is worth knowing which.** This module had
+``connect_device(device)`` and ``disconnect_device(device)`` calling
+``org.kde.kstars.INDI.connect``. That method is
+``connect(host: s, port: i) -> b``: it attaches KStars' INDI *client* to an
+indiserver, and has nothing to do with connecting a device. There is no
+per-device connect on this interface at all — that is ``Ekos.connectDevices()``
+for the whole profile, or a ``CONNECTION`` property write through
+:class:`~nocturne.executor.indi.client.IndiClient` for one device. The stub in
+``fake_kstars.py`` had implemented ``connect(device: s)``, agreeing with the
+bridge because the same person wrote both, which is precisely why the tests
+were green and the code was wrong.
 
-Verifying them is https://github.com/alexcatesp/nocturne/issues/2, and it is the
-first executor task once KStars builds — which is blocked on Trixie (ADR 0008)
-and on the KStars tag (ADR 0006). The Optical Trains interface added in KStars
-3.8.2 is absent from this module entirely and is part of that work.
+The bridge still introspects the remote objects when it connects and refuses to
+start if what it needs is absent, naming what it wanted and what it found. That
+containment was never verification, and it is not redundant now: it is what
+catches a KStars upgrade that moves the surface.
+
+The Optical Trains interface (``org.kde.kstars.Ekos.OpticalTrain``, confirmed
+present in the built tree) is deliberately absent from this module. Its objects
+do not exist until Ekos has been started, and using them is M2.
 
 **On what the bridge is for.** Generic property read/write against the drivers
 goes through :class:`~nocturne.executor.indi.client.IndiClient`; SPEC section 4
@@ -42,7 +58,9 @@ from dbus_next.aio import MessageBus, ProxyInterface
 
 logger = logging.getLogger("nocturne.executor.ekos")
 
-#: The well-known bus name KStars claims.
+#: The well-known bus name KStars claims. Verified on the rig: ``ListNames``
+#: returns this and no per-process ``org.kde.kstars-<pid>`` beside it, so
+#: attaching to a fixed name is correct.
 KSTARS_BUS_NAME: Final = "org.kde.kstars"
 
 #: Object paths and interfaces. Adjust here if a KStars release moves them; the
@@ -52,7 +70,8 @@ EKOS_INTERFACE: Final = "org.kde.kstars.Ekos"
 INDI_PATH: Final = "/KStars/INDI"
 INDI_INTERFACE: Final = "org.kde.kstars.INDI"
 
-#: Methods the bridge calls. Verified by introspection before first use.
+#: Methods the bridge calls, checked by introspection before first use and
+#: checked against the recorded interface in CI.
 REQUIRED_EKOS_METHODS: Final[frozenset[str]] = frozenset(
     {"start", "stop", "connectDevices", "disconnectDevices"}
 )
@@ -407,10 +426,20 @@ class EkosBridge:
         result = await self._call(self._indi, "getDevices")
         return [str(name) for name in result or ()]
 
-    async def connect_device(self, device: str) -> None:
-        """Connect one device through Ekos."""
-        await self._call(self._indi, "connect", device)
+    async def connect_indiserver(self, host: str, port: int) -> bool:
+        """Attach KStars' INDI client to an indiserver at ``host:port``.
 
-    async def disconnect_device(self, device: str) -> None:
-        """Disconnect one device through Ekos."""
-        await self._call(self._indi, "disconnect", device)
+        ``org.kde.kstars.INDI.connect(host: s, port: i) -> b``, read from the
+        recorded interface. **This does not connect a device**, despite the
+        name, and this module used to assume it did — see the note at the top.
+        To connect the devices in the active profile, use
+        :meth:`connect_devices`; to connect one device,
+        :class:`~nocturne.executor.indi.client.IndiClient` writes its
+        ``CONNECTION`` property, and that path is the one the safety governor
+        gates.
+        """
+        return bool(await self._call(self._indi, "connect", host, port))
+
+    async def disconnect_indiserver(self, host: str, port: int) -> bool:
+        """Detach KStars' INDI client from the indiserver at ``host:port``."""
+        return bool(await self._call(self._indi, "disconnect", host, port))

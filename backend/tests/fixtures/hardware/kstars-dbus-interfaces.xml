@@ -1,0 +1,1450 @@
+===== org.kde.kstars.Ekos.Align.xml
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="org.kde.kstars.Ekos.Align">
+  <property name="opticalTrain" type="s" access="readwrite"/>
+  <property name="camera" type="s" access="read"/>
+  <property name="filterWheel" type="s" access="read"/>
+  <property name="filter" type="s" access="readwrite"/>
+  <property name="logText" type="as" access="read"/>
+  <property name="status" type="i" access="read">
+    <annotation name="org.qtproject.QtDBus.QtTypeName" value="Ekos::AlignState"/>
+  </property>
+  <property name="fov" type="ad" access="read">
+    <annotation name="org.qtproject.QtDBus.QtTypeName" value="QList&lt;double&gt;"/>
+  </property>
+  <property name="solverArguments" type="s" access="readwrite"/>
+    <method name="abort">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="captureAndSolve">
+      <arg type="b" direction="out"/>
+    </method>
+    <method name="loadAndSlew">
+      <arg type="b" direction="out"/>
+      <arg name="fileURL" type="s" direction="in"/>
+    </method>
+    <method name="setSolverMode">
+      <arg name="mode" type="u" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="setSolverAction">
+      <arg name="mode" type="i" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="cameraInfo">
+    <arg type="ad" direction="out"/>
+    <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="QList&lt;double&gt;"/>
+    <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="QList&lt;double&gt;"/>
+    </method>    
+    <method name="getSolutionResult">
+      <arg type="ad" direction="out"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="QList&lt;double&gt;"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="QList&lt;double&gt;"/>
+    </method>
+    <method name="telescopeInfo">
+      <arg type="ad" direction="out"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="QList&lt;double&gt;"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="QList&lt;double&gt;"/>
+    </method>
+    <method name="getLoadAndSlewStatus">
+      <arg type="i" direction="out"/>
+    </method>
+    <method name="setBinningIndex">
+      <arg name="binningIndex" type="i" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>    
+    <method name="setTargetCoords">
+      <arg name="ra" type="d" direction="in"/>
+      <arg name="de" type="d" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="getTargetCoords">
+      <arg type="ad" direction="out"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="QList&lt;double&gt;"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="QList&lt;double&gt;"/>
+    </method>
+    <method name="setTargetPositionAngle">
+      <arg name="value" type="d" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <signal name="newStatus">
+        <arg name="status" type="(i)" direction="out"/>
+        <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="Ekos::AlignState"/>
+        <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="Ekos::AlignState"/>
+    </signal>
+    <signal name="newSolution">
+        <arg name="solution" type="a{sv}" direction="out"/>
+        <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="QVariantMap"/>
+        <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="QVariantMap"/>
+    </signal>
+    <signal name="newLog">
+        <arg name="text" type="s" direction="out"/>
+    </signal>
+  </interface>
+</node>
+===== org.kde.kstars.Ekos.Capture.xml
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="org.kde.kstars.Ekos.Capture">
+    <property name="targetName" type="s" access="readwrite"/>
+    <property name="observerName" type="s" access="readwrite"/>
+    <property name="opticalTrain" type="s" access="readwrite"/>
+    <property name="camera" type="s" access="read"/>
+    <property name="filterWheel" type="s" access="read"/>
+    <property name="filter" type="s" access="readwrite"/>
+    <property name="coolerControl" type="b" access="readwrite"/>
+    <property name="logText" type="as" access="read"/>
+    <property name="status" type="i" access="read">
+        <annotation name="org.qtproject.QtDBus.QtTypeName" value="Ekos::CaptureState"/>
+    </property>
+    <method name="start">
+      <arg name="train" type="s" direction="in"/>
+      <arg type="s" direction="out"/>
+    </method>
+    <method name="abort">
+      <arg name="train" type="s" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="suspend">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="stop">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="pause">
+        <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="toggleSequence">
+        <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="restartCamera">
+        <arg name="name" type="s" direction="in"/>
+        <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="toggleVideo">
+      <arg name="enabled" type="b" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="findCameraPosition">
+      <arg type="i" direction="out"/>
+      <arg name="train" type="s" direction="in"/>
+      <arg name="addIfNecessary" type="b" direction="in"/>
+    </method>
+    <method name="loadSequenceQueue">
+      <arg type="b" direction="out"/>
+      <arg name="fileURL" type="s" direction="in"/>
+      <arg name="train" type="s" direction="in"/>
+      <arg name="isMaster" type="b" direction="in"/>
+      <arg name="targetName" type="s" direction="in"/>
+    </method>
+    <method name="saveSequenceQueue">
+      <arg type="b" direction="out"/>
+      <arg name="path" type="s" direction="in"/>
+    </method>
+    <method name="clearSequenceQueue">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="getSequenceQueueStatus">
+      <arg type="s" direction="out"/>
+    </method>
+    <method name="setMaximumGuidingDeviation">
+      <arg name="enable" type="b" direction="in"/>
+      <arg name="value" type="d" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="setInSequenceFocus">
+      <arg name="enable" type="b" direction="in"/>
+      <arg name="HFR" type="d" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="getJobCount">
+      <arg type="i" direction="out"/>
+    </method>
+    <method name="getPendingJobCount">
+      <arg type="i" direction="out"/>
+    </method>
+    <method name="getJobState">
+      <arg type="s" direction="out"/>
+      <arg name="id" type="i" direction="in"/>
+    </method>
+    <method name="getJobFilterName">
+      <arg type="s" direction="out"/>
+      <arg name="id" type="i" direction="in"/>
+    </method>
+    <method name="getJobImageProgress">
+      <arg type="i" direction="out"/>
+      <arg name="id" type="i" direction="in"/>
+    </method>
+    <method name="getJobImageCount">
+      <arg type="i" direction="out"/>
+      <arg name="id" type="i" direction="in"/>
+    </method>
+    <method name="getJobExposureProgress">
+      <arg type="d" direction="out"/>
+      <arg name="id" type="i" direction="in"/>
+    </method>
+    <method name="getJobExposureDuration">
+      <arg type="d" direction="out"/>
+      <arg name="id" type="i" direction="in"/>
+    </method>
+    <method name="getJobFrameType">
+      <arg type="i" direction="out"/>
+      <arg name="id" type="i" direction="in"/>
+    </method>
+    <method name="getJobPlaceholderFormat">
+      <arg type="s" direction="out"/>
+    </method>
+    <method name="getJobPreviewFileName">
+      <arg type="s" direction="out"/>
+    </method>
+    <method name="getProgressPercentage">
+      <arg type="d" direction="out"/>
+    </method>
+    <method name="getActiveJobID">
+      <arg type="i" direction="out"/>
+    </method>
+    <method name="getActiveJobRemainingTime">
+      <arg type="i" direction="out"/>
+    </method>
+    <method name="getOverallRemainingTime">
+      <arg type="i" direction="out"/>
+    </method>
+    <method name="clearAutoFocusHFR">
+      <arg name="trainname" type="s" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="ignoreSequenceHistory">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="setCapturedFramesMap">
+      <arg name="signature" type="s" direction="in"/>
+      <arg name="count" type="i" direction="in"/>
+      <arg name="train" type="s" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="setPicturesDirectory">
+      <arg name="path" type="s" direction="in"/>
+      <arg type="b" direction="out"/>
+    </method>
+    <method name="getPicturesDirectory">
+      <arg type="s" direction="out"/>
+    </method>
+    <method name="mainCameraDeviceName">
+      <arg type="s" direction="out"/>
+    </method>
+    <signal name="newLog">
+        <arg name="text" type="s" direction="out"/>
+    </signal>
+    <signal name="meridianFlipStarted"/>
+    <signal name="newStatus">
+        <arg name="status" type="(i)" direction="out"/>
+        <arg name="trainname" type="s" direction="out"/>
+        <arg name="cameraID" type="i" direction="out"/>
+        <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="Ekos::CaptureState"/>
+    </signal>
+    <signal name="captureComplete">
+        <arg name="metadata" type="a{sv}" direction="out"/>
+        <arg name="train" type="s" direction="out"/>
+        <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="QVariantMap"/>
+        <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="QVariantMap"/>
+    </signal>
+    <signal name="ready"/>
+  </interface>
+</node>
+===== org.kde.kstars.Ekos.Focus.xml
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="org.kde.kstars.Ekos.Focus">
+    <method name="camera">
+      <arg name="trainname" type="s" direction="in"/>
+      <arg type="s" direction="out"/>
+    </method>
+    <method name="filterWheel">
+      <arg name="trainname" type="s" direction="in"/>
+      <arg type="s" direction="out"/>
+    </method>
+    <method name="filter">
+      <arg name="trainname" type="s" direction="in"/>
+      <arg type="s" direction="out"/>
+    </method>
+    <method name="setFilter">
+      <arg name="filter" type="s" direction="in"/>
+      <arg name="trainname" type="s" direction="in"/>
+      <arg type="b" direction="out"/>
+    </method>
+    <method name="focuser">
+      <arg name="trainname" type="s" direction="in"/>
+      <arg type="s" direction="out"/>
+    </method>
+    <method name="status">
+      <arg name="trainname" type="s" direction="in"/>
+      <arg type="(i)" direction="out"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="Ekos::FocusState"/>
+    </method>
+    <method name="start">
+      <arg name="trainname" type="s" direction="in"/>
+      <arg type="b" direction="out"/>
+    </method>
+    <method name="abort">
+      <arg name="trainname" type="s" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="capture">
+      <arg name="trainname" type="s" direction="in"/>
+      <arg name="settleTime" type="d" direction="in"/>
+      <arg type="b" direction="out"/>
+    </method>
+    <method name="focusIn">
+      <arg name="trainname" type="s" direction="in"/>
+      <arg type="b" direction="out"/>
+      <arg name="ms" type="i" direction="in"/>
+    </method>    
+    <method name="focusOut">
+      <arg name="trainname" type="s" direction="in"/>
+      <arg type="b" direction="out"/>
+      <arg name="ms" type="i" direction="in"/>
+    </method>
+    <method name="checkFocus">
+      <arg name="requiredHFR" type="d" direction="in"/>
+      <arg name="trainname" type="s" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="canAutoFocus">
+      <arg name="trainname" type="s" direction="in"/>
+      <arg type="b" direction="out"/>
+    </method>
+    <method name="useFullField">
+      <arg name="trainname" type="s" direction="in"/>
+      <arg type="b" direction="out"/>
+    </method>
+    <method name="setBinning">
+      <arg name="binX" type="i" direction="in"/>
+      <arg name="binY" type="i" direction="in"/>
+      <arg name="trainname" type="s" direction="in"/>
+      <arg type="b" direction="out"/>
+    </method>
+    <method name="setAutoStarEnabled">
+      <arg name="enable" type="b" direction="in"/>
+      <arg name="trainname" type="s" direction="in"/>
+      <arg type="b" direction="out"/>
+    </method>
+    <method name="setAutoSubFrameEnabled">
+      <arg name="enable" type="b" direction="in"/>
+      <arg name="trainname" type="s" direction="in"/>
+      <arg type="b" direction="out"/>
+    </method>
+    <method name="setAutoFocusParameters">
+      <arg name="trainname" type="s" direction="in"/>
+      <arg name="boxSize" type="i" direction="in"/>
+      <arg name="stepSize" type="i" direction="in"/>
+      <arg name="maxTravel" type="i" direction="in"/>
+      <arg name="tolerance" type="d" direction="in"/>
+      <arg type="b" direction="out"/>
+    </method>
+    <method name="resetFrame">
+      <arg name="trainname" type="s" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <signal name="newStatus">
+        <arg name="status" type="(i)" direction="out"/>
+        <arg name="trainname" type="s" direction="out"/>
+        <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="Ekos::FocusState"/>
+    </signal>
+    <signal name="newLog">
+        <arg name="text" type="s" direction="out"/>
+    </signal>
+    <signal name="newHFR">
+        <arg name="HFR" type="d" direction="out"/>
+        <arg name="position" type="i" direction="out"/>
+        <arg name="inAutofocus" type="b" direction="out"/>
+        <arg name="trainname" type="s" direction="out"/>
+    </signal>
+  </interface>
+</node>
+===== org.kde.kstars.Ekos.Guide.xml
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="org.kde.kstars.Ekos.Guide">
+  <property name="opticalTrain" type="s" access="readwrite"/>
+  <property name="camera" type="s" access="read"/>
+  <property name="guider" type="s" access="read"/>
+  <property name="logText" type="as" access="read"/>
+  <property name="exposure" type="d" access="readwrite"/>
+  <property name="status" type="i" access="read">
+    <annotation name="org.qtproject.QtDBus.QtTypeName" value="Ekos::GuideState"/>
+  </property>
+  <property name="axisDelta" type="ad" access="read">
+    <annotation name="org.qtproject.QtDBus.QtTypeName" value="QList&lt;double&gt;"/>
+  </property>
+  <property name="axisSigma" type="ad" access="read">
+    <annotation name="org.qtproject.QtDBus.QtTypeName" value="QList&lt;double&gt;"/>
+  </property>
+    <method name="connectGuider">
+        <arg type="b" direction="out"/>
+    </method>
+    <method name="disconnectGuider">
+      <arg type="b" direction="out"/>
+    </method>
+    <method name="guide">
+      <arg type="b" direction="out"/>
+    </method>
+    <method name="abort">
+      <arg type="b" direction="out"/>
+    </method>
+    <method name="calibrate">
+      <arg type="b" direction="out"/>
+    </method>
+    <method name="capture">
+      <arg type="b" direction="out"/>
+    </method>
+    <method name="loop">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="dither">
+      <arg type="b" direction="out"/>
+    </method>
+    <method name="suspend">
+      <arg type="b" direction="out"/>
+    </method>
+    <method name="resume">
+      <arg type="b" direction="out"/>
+    </method>
+    <method name="clearCalibration">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>    
+    <method name="setDarkFrameEnabled">
+      <arg name="enable" type="b" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="setSubFrameEnabled">
+      <arg name="enable" type="b" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="setAutoStarEnabled">
+      <arg name="enable" type="b" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="setGuiderType">
+      <arg name="guideType" type="i" direction="in"/>
+      <arg type="b" direction="out"/>
+    </method>
+    <signal name="newStatus">
+        <arg name="status" type="(i)" direction="out"/>
+        <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="Ekos::GuideState"/>
+        <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="Ekos::GuideState"/>
+    </signal>
+    <signal name="newAxisDelta">
+        <arg name="ra" type="d" direction="out"/>
+        <arg name="de" type="d" direction="out"/>
+    </signal>
+    <signal name="newAxisSigma">
+        <arg name="ra" type="d" direction="out"/>
+        <arg name="de" type="d" direction="out"/>
+    </signal>
+    <signal name="newLog">
+        <arg name="text" type="s" direction="out"/>
+    </signal>
+  </interface>
+</node>
+===== org.kde.kstars.Ekos.Mount.xml
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+    <interface name="org.kde.kstars.Ekos.Mount">
+        <property name="opticalTrain" type="s" access="readwrite"/>
+        <property name="logText" type="as" access="read"/>
+        <property name="canPark" type="b" access="read"/>
+        <property name="slewStatus" type="i" access="read"/>
+        <property name="altitudeLimits" type="ad" access="readwrite">
+            <annotation name="org.qtproject.QtDBus.QtTypeName" value="QList&lt;double&gt;"/>
+        </property>
+        <property name="altitudeLimitsEnabled" type="b" access="readwrite"/>
+        <property name="hourAngleLimit" type="d" access="readwrite"/>
+        <property name="hourAngleLimitEnabled" type="b" access="readwrite"/>
+        <property name="equatorialCoords" type="ad" access="read">
+            <annotation name="org.qtproject.QtDBus.QtTypeName" value="QList&lt;double&gt;"/>
+        </property>
+        <property name="horizontalCoords" type="ad" access="read">
+            <annotation name="org.qtproject.QtDBus.QtTypeName" value="QList&lt;double&gt;"/>
+        </property>
+        <property name="slewRate" type="i" access="readwrite"/>
+        <property name="hourAngle" type="d" access="read"/>
+        <property name="status" type="i" access="read">
+            <annotation name="org.qtproject.QtDBus.QtTypeName" value="ISD::Mount::Status"/>
+        </property>
+        <property name="parkStatus" type="i" access="read">
+            <annotation name="org.qtproject.QtDBus.QtTypeName" value="ISD::ParkStatus"/>
+        </property>
+        <property name="pierSide" type="i" access="read">
+            <annotation name="org.qtproject.QtDBus.QtTypeName" value="ISD::Mount::PierSide"/>
+        </property>
+        <method name="slew">
+            <arg type="b" direction="out"/>
+            <arg name="RA" type="d" direction="in"/>
+            <arg name="DEC" type="d" direction="in"/>
+        </method>
+        <method name="sync">
+            <arg type="b" direction="out"/>
+            <arg name="RA" type="d" direction="in"/>
+            <arg name="DEC" type="d" direction="in"/>
+        </method>
+        <method name="gotoTarget">
+            <arg type="b" direction="out"/>
+            <arg name="target" type="s" direction="in"/>
+        </method>
+        <method name="syncTarget">
+            <arg type="b" direction="out"/>
+            <arg name="target" type="s" direction="in"/>
+        </method>
+        <method name="abort">
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="park">
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="unpark">
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="resetModel">
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="setMeridianFlipValues">
+            <arg name="activate" type="b" direction="in"/>
+            <arg name="hours" type="d" direction="in"/>
+            <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+        </method>
+        <signal name="newStatus">
+            <arg name="status" type="(i)" direction="out"/>
+            <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="ISD::Mount::Status"/>
+            <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="ISD::Mount::Status"/>
+        </signal>
+        <signal name="newParkStatus">
+            <arg name="status" type="(i)" direction="out"/>
+            <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="ISD::ParkStatus"/>
+            <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="ISD::ParkStatus"/>
+        </signal>
+        <signal name="pierSideChanged">
+            <arg name="side" type="(i)" direction="out"/>
+            <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="ISD::Mount::PierSide"/>
+            <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="ISD::Mount::PierSide"/>
+        </signal>
+        <signal name="newMeridianFlipSetup">
+            <arg name="activate" type="b" direction="in"/>
+            <arg name="hours" type="d" direction="in"/>
+        </signal>
+        <signal name="ready"/>
+    </interface>
+</node>
+===== org.kde.kstars.Ekos.Observatory.xml
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="org.kde.kstars.Ekos.Observatory">
+    <property name="logText" type="as" access="read"/>
+    <property name="status" type="i" access="read">
+        <annotation name="org.qtproject.QtDBus.QtTypeName" value="ISD::Weather::Status"/>
+    </property>
+    <signal name="newStatus">
+        <arg name="status" type="(i)" direction="out"/>
+        <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="ISD::Weather::Status"/>
+        <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="ISD::Weather::Status"/>
+    </signal>
+  </interface>
+</node>
+===== org.kde.kstars.Ekos.OpticalTrain.xml
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<!--
+    SPDX-FileCopyrightText: 2024 Jasem Mutlaq <mutlaqja@ikarustech.com>
+
+    SPDX-License-Identifier: GPL-2.0-or-later
+-->
+<node>
+    <interface name="org.kde.kstars.Ekos.OpticalTrain">
+
+        <!-- Identity -->
+        <property name="name" type="s" access="read"/>
+        <property name="id"   type="i" access="read"/>
+
+        <!-- Device assignments (read-only; use setter methods to change) -->
+        <property name="mount"       type="s" access="read"/>
+        <property name="camera"      type="s" access="read"/>
+        <property name="focuser"     type="s" access="read"/>
+        <property name="filterWheel" type="s" access="read"/>
+        <property name="rotator"     type="s" access="read"/>
+        <property name="dustCap"     type="s" access="read"/>
+        <property name="lightBox"    type="s" access="read"/>
+        <property name="scope"       type="s" access="read"/>
+        <property name="reducer"     type="d" access="read"/>
+        <property name="guider"      type="s" access="read"/>
+
+        <!-- Setters for individual device fields -->
+        <method name="setMount">
+            <arg name="name" type="s" direction="in"/>
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="setCamera">
+            <arg name="name" type="s" direction="in"/>
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="setFocuser">
+            <arg name="name" type="s" direction="in"/>
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="setFilterWheel">
+            <arg name="name" type="s" direction="in"/>
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="setRotator">
+            <arg name="name" type="s" direction="in"/>
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="setDustCap">
+            <arg name="name" type="s" direction="in"/>
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="setLightBox">
+            <arg name="name" type="s" direction="in"/>
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="setScope">
+            <arg name="name" type="s" direction="in"/>
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="setReducer">
+            <arg name="value" type="d" direction="in"/>
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="setGuider">
+            <arg name="name" type="s" direction="in"/>
+            <arg type="b" direction="out"/>
+        </method>
+
+        <!-- Bulk operations -->
+        <method name="remove">
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="reset">
+            <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+        </method>
+
+        <!-- Signals -->
+        <signal name="updated"/>
+        <signal name="removed"/>
+
+    </interface>
+</node>
+===== org.kde.kstars.Ekos.Scheduler.xml
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="org.kde.kstars.Ekos.Scheduler">
+  <property name="profile" type="s" access="readwrite"/>
+  <property name="currentJobName" type="s" access="read"/>
+  <property name="currentJobJson" type="s" access="read"/>
+  <property name="jsonJobs" type="s" access="read"/>
+  <property name="logText" type="as" access="read"/>
+  <property name="status" type="i" access="read">
+    <annotation name="org.qtproject.QtDBus.QtTypeName" value="Ekos::SchedulerState"/>
+  </property>
+    <method name="start">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="stop">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="removeAllJobs">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="loadScheduler">
+      <arg name="fileURL" type="s" direction="in"/>
+      <arg type="b" direction="out"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="QUrl"/>
+    </method>
+    <method name="setSequence">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+      <arg name="sequenceFileURL" type="s" direction="in"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="QUrl"/>
+    </method>
+    <method name="resetAllJobs">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <signal name="newStatus">
+        <arg name="status" type="(i)" direction="out"/>
+        <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="Ekos::SchedulerState"/>
+        <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="Ekos::SchedulerState"/>
+    </signal>
+    <signal name="newLog">
+        <arg name="text" type="s" direction="out"/>
+    </signal>
+  </interface>
+</node>
+===== org.kde.kstars.Ekos.xml
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="org.kde.kstars.Ekos">
+    <property name="indiStatus" type="i" access="read">
+        <annotation name="org.qtproject.QtDBus.QtTypeName" value="Ekos::CommunicationStatus"/>
+    </property>
+    <property name="ekosStatus" type="i" access="read">
+        <annotation name="org.qtproject.QtDBus.QtTypeName" value="Ekos::CommunicationStatus"/>
+    </property>
+    <property name="settleStatus" type="u" access="read"/>
+    <property name="ekosLiveStatus" type="b" access="read"/>
+    <property name="extensionStatus" type="i" access="read"/>
+    <property name="logText" type="as" access="read"/>
+    <method name="connectDevices">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="disconnectDevices">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="start">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="stop">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="getProfiles">
+      <arg type="as" direction="out"/>
+    </method>
+    <method name="setProfile">
+      <arg name="profileName" type="s" direction="in"/>
+      <arg type="b" direction="out"/>
+    </method>
+    <method name="addProfile">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+      <arg name="profileJSON" type="s" direction="in"/>
+    </method>
+    <method name="editProfile">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+      <arg name="profileJSON" type="s" direction="in"/>
+    </method>
+    <method name="deleteProfile">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+      <arg name="name" type="s" direction="in"/>
+    </method>
+    <method name="getProfile">
+      <arg name="name" type="s" direction="in"/>
+      <arg type="s" direction="out"/>
+    </method>
+    <method name="setEkosLiveConnected">
+        <arg name="enabled" type="b" direction="in"/>
+    </method>
+    <method name="setEkosLiveConfig">
+        <arg name="rememberCredentials" type="b" direction="in"/>
+        <arg name="autoConnect" type="b" direction="in"/>
+    </method>
+    <method name="setEkosLiveUser">
+        <arg name="username" type="s" direction="in"/>
+        <arg name="password" type="s" direction="in"/>
+    </method>
+    <method name="setEkosLoggingEnabled">
+        <arg name="name" type="s" direction="in"/>
+        <arg name="enabled" type="b" direction="in"/>
+    </method>
+    <method name="setFITSfromFile">
+        <arg name="previewFromFile" type="b" direction="in"/>
+    </method>
+    <method name="previewFile">
+        <arg name="filePath" type="s" direction="in"/>
+    </method>
+    <signal name="indiStatusChanged">
+        <arg name="status" type="(i)" direction="out"/>
+        <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="Ekos::CommunicationStatus"/>
+        <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="Ekos::CommunicationStatus"/>
+    </signal>
+    <signal name="ekosStatusChanged">
+        <arg name="status" type="(i)" direction="out"/>
+        <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="Ekos::CommunicationStatus"/>
+        <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="Ekos::CommunicationStatus"/>
+    </signal>
+    <signal name="settleStatusChanged">
+        <arg name="status" type="(i)" direction="out"/>
+        <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="Ekos::CommunicationStatus"/>
+        <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="Ekos::CommunicationStatus"/>
+    </signal>
+    <signal name="ekosLiveStatusChanged">
+        <arg name="status" type="b" direction="out"/>
+    </signal>
+    <signal name="extensionStatusChanged">
+        <arg name="status" type="b" direction="out"/>
+    </signal>
+    <signal name="newLog">
+        <arg name="text" type="s" direction="out"/>
+    </signal>
+    <signal name="newModule">
+        <arg name="name" type="s" direction="out"/>
+    </signal>
+    <signal name="newDevice">
+        <arg name="name" type="s" direction="out"/>
+        <arg name="interface" type="i" direction="out"/>
+    </signal>
+  </interface>
+</node>
+===== org.kde.kstars.FOV.xml
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="org.kde.kstars.fov">
+    <property name="name" type="s" access="readwrite"/>
+    <property name="sizeX" type="d" access="readwrite"/>
+    <property name="sizeY" type="d" access="readwrite"/>
+    <property name="offsetX" type="d" access="readwrite"/>
+    <property name="offsetY" type="d" access="readwrite"/>
+    <property name="PA" type="d" access="readwrite"/>
+    <property name="color" type="s" access="readwrite"/>
+    <property name="cpLock" type="b" access="readwrite"/>
+    <property name="shape" type="(i)" access="readwrite">
+      <annotation name="org.qtproject.QtDBus.QtTypeName" value="FOV::Shape"/>
+    </property>
+  </interface>
+</node>
+===== org.kde.kstars.INDI.Dome.xml
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+    <interface name="org.kde.kstars.INDI.Dome">
+        <property name="name" type="s" access="read"/>
+        <property name="connected" type="b" access="read"/>
+        <property name="canPark" type="b" access="read"/>
+        <property name="canAbsMove" type="b" access="read"/>
+        <property name="canRelMove" type="b" access="read"/>
+        <property name="canAbort" type="b" access="read"/>
+        <property name="position" type="d" access="readwrite"/>
+        <property name="isMoving" type="b" access="read"/>
+        <property name="status" type="i" access="read">
+            <annotation name="org.qtproject.QtDBus.QtTypeName" value="ISD::Dome::Status"/>
+        </property>
+        <property name="shutterStatus" type="i" access="read">
+            <annotation name="org.qtproject.QtDBus.QtTypeName" value="ISD::Dome::ShutterStatus"/>
+        </property>
+        <property name="parkStatus" type="i" access="read">
+            <annotation name="org.qtproject.QtDBus.QtTypeName" value="ISD::ParkStatus"/>
+        </property>
+        <method name="Connect">
+            <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+        </method>
+        <method name="Disconnect">
+            <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+        </method>
+        <method name="isParked">
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="park">
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="unpark">
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="abort">
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="moveCW">
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="moveCCW">
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="controlShutter">
+            <arg name="open" type="b" direction="in"/>
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="hasShutter">
+            <arg type="b" direction="out"/>
+        </method>
+        <signal name="Connected"/>
+        <signal name="Disconnected"/>
+        <signal name="ready"/>
+        <signal name="newStatus">
+            <arg name="status" type="(i)" direction="out"/>
+            <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="ISD::Dome::Status"/>
+            <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="ISD::Dome::Status"/>
+        </signal>
+        <signal name="newParkStatus">
+            <arg name="status" type="(i)" direction="out"/>
+            <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="ISD::ParkStatus"/>
+            <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="ISD::ParkStatus"/>
+        </signal>
+        <signal name="newShutterStatus">
+            <arg name="status" type="(i)" direction="out"/>
+            <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="ISD::Dome::ShutterStatus"/>
+            <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="ISD::Dome::ShutterStatus"/>
+        </signal>
+        <signal name="positionChanged">
+            <arg name="degrees" type="d" direction="out"/>
+        </signal>
+    </interface>
+</node>
+===== org.kde.kstars.INDI.DustCap.xml
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+    <interface name="org.kde.kstars.INDI.DustCap">
+        <property name="name" type="s" access="read"/>
+        <property name="connected" type="b" access="read"/>
+        <property name="canPark" type="b" access="read"/>
+        <property name="status" type="i" access="read">
+            <annotation name="org.qtproject.QtDBus.QtTypeName" value="ISD::DustCap::Status"/>
+        </property>
+        <property name="parkStatus" type="i" access="read">
+            <annotation name="org.qtproject.QtDBus.QtTypeName" value="ISD::ParkStatus"/>
+        </property>
+        <method name="isParked">
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="isUnParked">
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="park">
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="unpark">
+            <arg type="b" direction="out"/>
+        </method>
+        <signal name="Connected"/>
+        <signal name="Disconnected"/>
+        <signal name="ready"/>
+        <signal name="newStatus">
+            <arg name="status" type="(i)" direction="out"/>
+            <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="ISD::DustCap::Status"/>
+            <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="ISD::DustCap::Status"/>
+        </signal>
+        <signal name="newParkStatus">
+            <arg name="status" type="(i)" direction="out"/>
+            <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="ISD::ParkStatus"/>
+            <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="ISD::ParkStatus"/>
+        </signal>
+    </interface>
+</node>
+===== org.kde.kstars.INDI.GenericDevice.xml
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="org.kde.kstars.INDI.GenericDevice">
+  <property name="name" type="s" access="read"/>
+  <property name="driverInterface" type="i" access="read"/>
+  <property name="driverVersion" type="s" access="read"/>
+  <property name="connected" type="b" access="read"/>
+    <method name="Connect">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="Disconnect">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <signal name="Connected"/>
+    <signal name="Disconnected"/>
+    <signal name="ready"/>
+  </interface>
+</node>
+===== org.kde.kstars.INDI.LightBox.xml
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+    <interface name="org.kde.kstars.INDI.LightBox">
+        <property name="name" type="s" access="read"/>
+        <property name="connected" type="b" access="read"/>
+        <property name="status" type="i" access="read">
+            <annotation name="org.qtproject.QtDBus.QtTypeName" value="ISD::LightBox::LightStatus"/>
+        </property>
+        <property name="brightness" type="q" access="read"/>
+        <method name="isLightOn">
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="setLightEnabled">
+            <arg type="b" direction="out"/>
+            <arg name="enable" type="b" direction="in"/>
+        </method>
+        <method name="setBrightness">
+            <arg type="b" direction="out"/>
+            <arg name="val" type="q" direction="in"/>
+        </method>
+        <signal name="Connected"/>
+        <signal name="Disconnected"/>
+        <signal name="ready"/>
+        <signal name="newStatus">
+            <arg name="status" type="(i)" direction="out"/>
+            <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="ISD::LightBox::LightStatus"/>
+            <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="ISD::LightBox::LightStatus"/>
+        </signal>
+    </interface>
+</node>===== org.kde.kstars.INDI.PAC.xml
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+    <interface name="org.kde.kstars.INDI.PAC">
+        <property name="name" type="s" access="read"/>
+        <property name="connected" type="b" access="read"/>
+        <property name="status" type="i" access="read">
+            <annotation name="org.qtproject.QtDBus.QtTypeName" value="ISD::PAC::Status"/>
+        </property>
+        <method name="startCorrection">
+            <arg name="azError" type="d" direction="in"/>
+            <arg name="altError" type="d" direction="in"/>
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="abortCorrection">
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="moveAZ">
+            <arg name="degrees" type="d" direction="in"/>
+            <arg type="b" direction="out"/>
+        </method>
+        <method name="moveALT">
+            <arg name="degrees" type="d" direction="in"/>
+            <arg type="b" direction="out"/>
+        </method>
+        <signal name="Connected"/>
+        <signal name="Disconnected"/>
+        <signal name="ready"/>
+        <signal name="newStatus">
+            <arg name="status" type="(i)" direction="out"/>
+            <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="ISD::PAC::Status"/>
+            <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="ISD::PAC::Status"/>
+        </signal>
+    </interface>
+</node>
+===== org.kde.kstars.INDI.Weather.xml
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+    <interface name="org.kde.kstars.INDI.Weather">
+        <property name="name" type="s" access="read"/>
+        <property name="connected" type="b" access="read"/>
+        <property name="data" type="s" access="read"/>
+        <property name="refreshPeriod" type="i" access="read"/>
+        <property name="status" type="i" access="read">
+            <annotation name="org.qtproject.QtDBus.QtTypeName" value="ISD::Weather::Status"/>
+        </property>
+
+        <method name="Connect">
+            <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+        </method>
+        <method name="Disconnect">
+            <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+        </method>
+        <signal name="Connected"/>
+        <signal name="Disconnected"/>
+        <signal name="ready"/>
+        <signal name="newStatus">
+            <arg name="status" type="(i)" direction="out"/>
+            <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="ISD::Weather::Status"/>
+            <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="ISD::Weather::Status"/>
+        </signal>
+    </interface>
+</node>
+===== org.kde.kstars.INDI.xml
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="org.kde.kstars.INDI">
+    <method name="start">
+    <arg type="b" direction="out"/>
+    <arg name="port" type="i" direction="in"/>
+    <arg name="drivers" type="as" direction="in"/>
+    </method>   
+    <method name="stop">
+    <arg type="b" direction="out"/>
+    <arg name="port" type="s" direction="in"/>
+    </method>
+    <method name="connect">
+        <arg type="b" direction="out"/>
+        <arg name="host" type="s" direction="in"/>
+        <arg name="port" type="i" direction="in"/>
+    </method>
+    <method name="disconnect">
+        <arg type="b" direction="out"/>
+        <arg name="host" type="s" direction="in"/>
+        <arg name="port" type="i" direction="in"/>
+    </method>
+    <method name="getDevices">
+        <arg type="as" direction="out"/>
+    </method>
+    <method name="getProperties">
+        <arg type="as" direction="out"/>
+        <arg name="device" type="s" direction="in"/>
+    </method>
+    <method name="getPropertyState">
+        <arg type="s" direction="out"/>
+        <arg name="device" type="s" direction="in"/>
+        <arg name="property" type="s" direction="in"/>
+    </method>
+    <method name="getDevicesPaths">
+        <arg type="as" direction="out"/>
+        <arg name="interface" type="i" direction="in"/>
+    </method>
+    <method name="sendProperty">
+        <arg type="b" direction="out"/>
+        <arg name="device" type="s" direction="in"/>
+        <arg name="property" type="s" direction="in"/>
+    </method>
+    <method name="getLight">
+        <arg type="s" direction="out"/>
+        <arg name="device" type="s" direction="in"/>
+        <arg name="property" type="s" direction="in"/>
+        <arg name="lightName" type="s" direction="in"/>
+    </method>
+    <method name="setSwitch">
+        <arg type="b" direction="out"/>
+        <arg name="device" type="s" direction="in"/>
+        <arg name="property" type="s" direction="in"/>
+        <arg name="switchName" type="s" direction="in"/>
+        <arg name="status" type="s" direction="in"/>
+    </method>
+    <method name="getSwitch">
+        <arg type="s" direction="out"/>
+        <arg name="device" type="s" direction="in"/>
+        <arg name="property" type="s" direction="in"/>
+        <arg name="switchName" type="s" direction="in"/>
+    </method>
+    <method name="setText">
+        <arg type="b" direction="out"/>
+        <arg name="device" type="s" direction="in"/>
+        <arg name="property" type="s" direction="in"/>
+        <arg name="textName" type="s" direction="in"/>
+        <arg name="text" type="s" direction="in"/>
+    </method>
+    <method name="getText">
+        <arg type="s" direction="out"/>
+        <arg name="device" type="s" direction="in"/>
+        <arg name="property" type="s" direction="in"/>
+        <arg name="textName" type="s" direction="in"/>
+    </method>
+    <method name="setNumber">
+        <arg type="b" direction="out"/>
+        <arg name="device" type="s" direction="in"/>
+        <arg name="property" type="s" direction="in"/>
+        <arg name="numberName" type="s" direction="in"/>
+        <arg name="value" type="d" direction="in"/>
+    </method>
+    <method name="getNumber">
+        <arg type="d" direction="out"/>
+        <arg name="device" type="s" direction="in"/>
+        <arg name="property" type="s" direction="in"/>
+        <arg name="numberName" type="s" direction="in"/>
+    </method>
+    <method name="getBLOBData">
+        <arg type="ay" direction="out"/>
+        <arg name="device" type="s" direction="in"/>
+        <arg name="property" type="s" direction="in"/>
+        <arg name="blobName" type="s" direction="in"/>
+        <arg name="blobFormat" type="s" direction="out"/>
+        <arg name="size" type="i" direction="out"/>
+    </method>
+    <method name="getBLOBFile">
+        <arg type="s" direction="out"/>
+        <arg name="device" type="s" direction="in"/>
+        <arg name="property" type="s" direction="in"/>
+        <arg name="blobName" type="s" direction="in"/>
+        <arg name="blobFormat" type="s" direction="out"/>
+        <arg name="size" type="i" direction="out"/>
+    </method>
+  </interface>
+</node>
+
+===== org.kde.kstars.SimClock.xml
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="org.kde.kstars.SimClock">
+    <method name="stop">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="start">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="setClockScale">
+      <arg name="scale" type="d" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="setNow">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+  </interface>
+</node>
+===== org.kde.kstars.xml
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="org.kde.kstars">
+    <property name="colorScheme" type="s" access="readwrite"/>
+    <property name="version" type="s" access="read"/>
+    <property name="release" type="s" access="read"/>
+    <method name="setRaDec">
+      <arg name="ra" type="d" direction="in"/>
+      <arg name="dec" type="d" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="setRaDecJ2000">
+      <arg name="ra0" type="d" direction="in"/>
+      <arg name="dec0" type="d" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="setAltAz">
+      <arg name="alt" type="d" direction="in"/>
+      <arg name="az" type="d" direction="in"/>
+      <arg name="altIsRefracted" type="b" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="setAltAz">
+      <arg name="alt" type="d" direction="in"/>
+      <arg name="az" type="d" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="lookTowards">
+      <arg name="direction" type="s" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="addLabel">
+      <arg name="name" type="s" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="removeLabel">
+      <arg name="name" type="s" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="addTrail">
+      <arg name="name" type="s" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="removeTrail">
+      <arg name="name" type="s" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="zoomIn">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="zoomOut">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="defaultZoom">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="zoom">
+      <arg name="z" type="d" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="setLocalTime">
+      <arg name="yr" type="i" direction="in"/>
+      <arg name="mth" type="i" direction="in"/>
+      <arg name="day" type="i" direction="in"/>
+      <arg name="hr" type="i" direction="in"/>
+      <arg name="min" type="i" direction="in"/>
+      <arg name="sec" type="i" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="setTimeToNow">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="waitFor">
+      <arg name="t" type="d" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="waitForKey">
+      <arg name="k" type="s" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="setTracking">
+      <arg name="track" type="b" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="changeViewOption">
+      <arg name="option" type="s" direction="in"/>
+      <arg name="value" type="s" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="getOption">
+      <arg name="name" type="s" direction="in"/>
+      <arg type="v" direction="out"/>
+    </method>
+    <method name="setOption">
+      <arg name="name" type="s" direction="in"/>
+      <arg name="value" type="v" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="getFocusInformationXML">
+      <arg type="s" direction="out"/>
+    </method>
+    <method name="readConfig">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="writeConfig">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="popupMessage">
+      <arg name="x" type="i" direction="in"/>
+      <arg name="y" type="i" direction="in"/>
+      <arg name="message" type="s" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="drawLine">
+      <arg name="x1" type="i" direction="in"/>
+      <arg name="y1" type="i" direction="in"/>
+      <arg name="x2" type="i" direction="in"/>
+      <arg name="y2" type="i" direction="in"/>
+      <arg name="speed" type="i" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="setGeoLocation">
+      <arg type="b" direction="out"/>
+      <arg name="city" type="s" direction="in"/>
+      <arg name="province" type="s" direction="in"/>
+      <arg name="country" type="s" direction="in"/>
+    </method>
+    <method name="location">
+      <arg type="s" direction="out"/>
+    </method>
+    <method name="setGPSLocation">
+      <arg type="b" direction="out"/>
+      <arg name="longitude" type="d" direction="in"/>
+      <arg name="latitude" type="d" direction="in"/>
+      <arg name="elevation" type="d" direction="in"/>
+      <arg name="tz0" type="d" direction="in"/>
+    </method>
+    <method name="setColor">
+      <arg name="colorName" type="s" direction="in"/>
+      <arg name="value" type="s" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="loadColorScheme">
+      <arg name="name" type="s" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="exportImage">
+      <arg name="filename" type="s" direction="in"/>
+      <arg name="width" type="i" direction="in"/>
+      <arg name="height" type="i" direction="in"/>
+      <arg name="includeLegend" type="b" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="exportImage">
+      <arg name="filename" type="s" direction="in"/>
+      <arg name="width" type="i" direction="in"/>
+      <arg name="height" type="i" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="exportImage">
+      <arg name="filename" type="s" direction="in"/>
+      <arg name="width" type="i" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="exportImage">
+      <arg name="filename" type="s" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="getDSSURL">
+      <arg type="s" direction="out"/>
+      <arg name="objectName" type="s" direction="in"/>
+    </method>
+    <method name="getDSSURL">
+      <arg type="s" direction="out"/>
+      <arg name="RA_J2000" type="d" direction="in"/>
+      <arg name="Dec_J2000" type="d" direction="in"/>
+      <arg name="width" type="d" direction="in"/>
+      <arg name="height" type="d" direction="in"/>
+    </method>
+    <method name="getDSSURL">
+      <arg type="s" direction="out"/>
+      <arg name="RA_J2000" type="d" direction="in"/>
+      <arg name="Dec_J2000" type="d" direction="in"/>
+    </method>
+    <method name="getObjectDataXML">
+      <arg type="s" direction="out"/>
+      <arg name="objectName" type="s" direction="in"/>
+      <arg name="fallbackToInternet" type="b" direction="in"/>
+      <arg name="storeInternetResolved" type="b" direction="in"/>
+    </method>
+    <method name="getObjectDataXML">
+      <arg type="s" direction="out"/>
+      <arg name="objectName" type="s" direction="in"/>
+      <arg name="fallbackToInternet" type="b" direction="in"/>
+    </method>
+    <method name="getObjectDataXML">
+      <arg type="s" direction="out"/>
+      <arg name="objectName" type="s" direction="in"/>
+    </method>
+    <method name="getObjectPositionInfo">
+      <arg type="s" direction="out"/>
+      <arg name="objectName" type="s" direction="in"/>
+    </method>
+    <method name="renderEyepieceView">
+      <arg name="objectName" type="s" direction="in"/>
+      <arg name="destPathChart" type="s" direction="in"/>
+      <arg name="fovWidth" type="d" direction="in"/>
+      <arg name="fovHeight" type="d" direction="in"/>
+      <arg name="rotation" type="d" direction="in"/>
+      <arg name="scale" type="d" direction="in"/>
+      <arg name="flip" type="b" direction="in"/>
+      <arg name="invert" type="b" direction="in"/>
+      <arg name="imagePath" type="s" direction="in"/>
+      <arg name="destPathImage" type="s" direction="in"/>
+      <arg name="overlay" type="b" direction="in"/>
+      <arg name="invertColors" type="b" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="setApproxFOV">
+      <arg name="FOV_Degrees" type="d" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="getSkyMapDimensions">
+      <arg type="s" direction="out"/>
+    </method>
+    <method name="getObservingWishListObjectNames">
+      <arg type="s" direction="out"/>
+    </method>
+    <method name="getObservingSessionPlanObjectNames">
+      <arg type="s" direction="out"/>
+    </method>
+    <method name="printImage">
+      <arg name="usePrintDialog" type="b" direction="in"/>
+      <arg name="useChartColors" type="b" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="openFITS">
+      <arg name="imageURL" type="(i)" direction="in"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.In0" value="QUrl"/>
+      <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="QUrl"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="listSkyMapViews">
+      <arg type="as" direction="out"/>
+    </method>
+    <method name="setSkyMapView">
+      <arg type="b" direction="out"/>
+      <arg name="viewName" type="s" direction="in"/>
+    </method>
+    <method name="setFOVIndicatorVisibility">
+      <arg type="b" direction="out"/>
+      <arg name="fovName" type="s" direction="in"/>
+      <arg name="visibility" type="b" direction="in"/>
+    </method>
+    <method name="getFOVIndicatorVisibility">
+      <arg type="b" direction="out"/>
+      <arg name="fovName" type="s" direction="in"/>
+    </method>
+    <method name="getFOVIndicators">
+      <arg type="as" direction="out"/>
+    </method>
+    <method name="setSkyMapRotation">
+      <arg name="viewAngle" type="d" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <method name="getSkyMapRotation">
+      <arg type="d" direction="out"/>
+    </method>
+    <method name="skyMapIsMirrored">
+      <arg type="b" direction="out"/>
+    </method>
+    <method name="setSkyMapMirrored">
+      <arg name="mirrored" type="b" direction="in"/>
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    <signal name="colorSchemeChanged">
+    </signal>
+    <method name="getToggleableActionStates">
+      <arg type="s" direction="out"/>
+    </method>
+    <method name="activateAction">
+      <arg type="b" direction="out"/>
+      <arg name="actionName" type="s" direction="in"/>
+    </method>
+    <method name="getActions">
+      <arg type="as" direction="out"/>
+    </method>
+    <method name="setToggleableActionState">
+      <arg type="b" direction="out"/>
+      <arg name="actionName" type="s" direction="in"/>
+      <arg name="state" type="b" direction="in"/>
+    </method>
+    <method name="colorScheme">
+      <arg type="s" direction="out"/>
+    </method>
+  </interface>
+</node>

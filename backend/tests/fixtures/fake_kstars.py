@@ -6,7 +6,15 @@ starting one in CI would test Qt rather than Nocturne. What has to be right in
 Nocturne's code — attaching, introspecting, refusing an interface that is not
 what it expects, and reattaching when KStars restarts — is all exercised here.
 
-The real KStars DBus surface is confirmed on the Pi during the M1 HITL step.
+**Every signature below is copied from the recorded interface**, not chosen.
+``ekos_interfaces.py`` parses
+``hardware/kstars-dbus-interfaces.xml``, and ``test_ekos_recorded_interface.py``
+asserts that each method this stub exports has the arity and signature KStars
+declares. That test exists because this file got it wrong once and could not
+have known: it implemented ``INDI.connect(device: s)`` while KStars declares
+``connect(host: s, port: i)``, agreeing with the bridge's misconception because
+the same author wrote both. A stub that shares the assumptions of the code it
+verifies proves the two are consistent and nothing more.
 
 This module deliberately does not use ``from __future__ import annotations``:
 dbus-next reads the method annotations as DBus signature strings, and the
@@ -66,25 +74,32 @@ class FakeEkosInterface(ServiceInterface):
 
 
 class FakeIndiInterface(ServiceInterface):
-    """The subset of org.kde.kstars.INDI that the bridge calls."""
+    """The subset of org.kde.kstars.INDI that the bridge calls.
+
+    ``connect`` and ``disconnect`` take a **host and a port**, not a device
+    name. They attach KStars' INDI client to an indiserver. This stub declared
+    ``connect(device: s)`` until the interface was recorded, which made the
+    bridge's ``connect_device()`` look correct in every test.
+    """
 
     def __init__(self, devices: Sequence[str] = DEFAULT_DEVICES) -> None:
         super().__init__(INDI_INTERFACE)
         self.devices = list(devices)
-        self.connected: set[str] = set()
+        #: (host, port) pairs this INDI client has been told to attach to.
+        self.servers: set[tuple[str, int]] = set()
 
     @method()
     def getDevices(self) -> "as":  # noqa: F722, N802
         return self.devices
 
     @method()
-    def connect(self, device: "s") -> "b":  # noqa: F821
-        self.connected.add(device)
+    def connect(self, host: "s", port: "i") -> "b":  # noqa: F821
+        self.servers.add((host, port))
         return True
 
     @method()
-    def disconnect(self, device: "s") -> "b":  # noqa: F821
-        self.connected.discard(device)
+    def disconnect(self, host: "s", port: "i") -> "b":  # noqa: F821
+        self.servers.discard((host, port))
         return True
 
 
