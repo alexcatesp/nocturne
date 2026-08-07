@@ -16,8 +16,9 @@ from pathlib import Path
 import pytest
 
 from nocturne.executor import Executor, IndiClient, IndiSettings
-from nocturne.executor.indi.client import DeviceAppeared, DeviceVanished, IndiEvent
+from nocturne.executor.indi.client import DeviceAppeared, DeviceVanished, IndiError, IndiEvent
 from nocturne.executor.indi.protocol import PropertyPermission, PropertyState
+from nocturne.executor.mount import MountLink
 from nocturne.safety import SafetyGovernor, SafetyViolation
 from nocturne.schemas import load_config_bundle
 from tests.fixtures.indi_server import (
@@ -361,3 +362,115 @@ class TestThroughTheExecutor:
         """SPEC section 9.1.2 holds against the real stack, not just in unit tests."""
         with pytest.raises(SafetyViolation, match="meridian"):
             executor.governor.require_autonomy_level("autonomous")
+
+
+class TestMountBringUpAgainstRealDrivers:
+    """MountLink over the real INDI protocol, not the in-process fake.
+
+    The bench script calls ``bring_up()``, so this is the path the operator
+    exercises on the rig. Everything about it was verified against a fake
+    server and then, once, by hand against ``indi_simulator_telescope`` — and
+    that one manual run found two defects the fake could not show: a
+    post-connect failure reported as "the mount did not connect over USB
+    serial", and the watcher racing the bring-up it was watching. Neither had
+    a test. This is that test.
+
+    The simulator is not an eqmod mount, so it offers DEVICE_PORT and
+    DEVICE_BAUD_RATE but no SLEWSPEEDS. That is exactly the interesting case:
+    everything up to and including CONNECT must work over the real wire, and
+    the missing vector must fail in a way that does not accuse the cable.
+    """
+
+    MOUNT = SIMULATOR_DEVICES["mount"]
+
+    @pytest.fixture
+    async def executor(
+        self, indi_server: IndiServerProcess, config_dir: Path
+    ) -> AsyncIterator[Executor]:
+        governor = SafetyGovernor(load_config_bundle(config_dir).safety)
+        client = IndiClient(SETTINGS.model_copy(update={"port": indi_server.port}))
+        running = Executor(client, governor)
+        await running.start()
+        try:
+            yield running
+        finally:
+            await running.aclose()
+
+    def link(self, executor: Executor, config_dir: Path) -> MountLink:
+        mount = load_config_bundle(config_dir).equipment.mount
+        # The simulator announces itself under its own name, and the port is
+        # not a real device on this machine.
+        return MountLink(
+            executor,
+            mount.model_copy(update={"indi_device_name": self.MOUNT, "port": None}),
+        )
+
+    async def test_it_connects_the_mount_over_the_real_protocol(
+        self, executor: Executor, config_dir: Path
+    ) -> None:
+        """Baud, port and CONNECT all land, against a real driver process."""
+        await executor.wait_for_device(self.MOUNT)
+        link = self.link(executor, config_dir)
+
+        async with link:
+            with pytest.raises(IndiError):
+                await link.bring_up(timeout=10.0)
+
+        assert executor.is_device_connected(self.MOUNT), (
+            "the mount did not connect; everything before SLEWSPEEDS should have worked"
+        )
+
+    async def test_the_baud_rate_reaches_the_driver(
+        self, executor: Executor, config_dir: Path
+    ) -> None:
+        await executor.wait_for_device(self.MOUNT)
+        link = self.link(executor, config_dir)
+        configured = str(load_config_bundle(config_dir).equipment.mount.baud)
+
+        async with link:
+            with pytest.raises(IndiError):
+                await link.bring_up(timeout=10.0)
+
+        baud = executor.get_property(self.MOUNT, "DEVICE_BAUD_RATE")
+        if baud is None or configured not in baud.elements:
+            pytest.skip(f"this driver does not offer {configured} baud")
+        assert baud[configured] is True
+
+    async def test_a_missing_vector_does_not_accuse_the_cable(
+        self, executor: Executor, config_dir: Path
+    ) -> None:
+        """The wrong verdict is worse than no verdict.
+
+        FIELD-NOTES-M1 section 5.1: a failure for reasons unrelated to the link
+        must not read as a link failure, because that is what would send the
+        project to the WiFi fallback for nothing.
+        """
+        await executor.wait_for_device(self.MOUNT)
+        link = self.link(executor, config_dir)
+
+        async with link:
+            with pytest.raises(IndiError) as raised:
+                await link.bring_up(timeout=10.0)
+
+        # The distinguishing fact the bench script keys on.
+        assert executor.is_device_connected(self.MOUNT)
+        assert "SLEWSPEEDS" in str(raised.value)
+
+    async def test_the_watcher_does_not_race_its_own_bring_up(
+        self, executor: Executor, config_dir: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The bring-up connects the mount; the watcher must not react to that.
+
+        It did, and logged a re-application failure while the bring-up was
+        still running — alarming, and pointing at the wrong thing.
+        """
+        await executor.wait_for_device(self.MOUNT)
+        link = self.link(executor, config_dir)
+
+        with caplog.at_level("ERROR", logger="nocturne.executor.mount"):
+            async with link:
+                with pytest.raises(IndiError):
+                    await link.bring_up(timeout=10.0)
+                await asyncio.sleep(0.2)
+
+        assert "could not re-apply" not in caplog.text, caplog.text
