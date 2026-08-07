@@ -165,29 +165,36 @@ Assume they will read your summary on a phone, at night, on a terrace.
 
 ## 10. Current state
 
-Milestone: **M1 in progress.** Branch `m1/instrument-control`. Do not start M2.
+Milestone: **M1 complete.** Branch `m1/instrument-control`. Do not start M2.
 
-**Done, on real hardware.** The Wave 150i connects to `indi_eqmod_telescope` over direct
-USB serial, with no SynScan bridge — the M1 HITL mount test **passed**, and the WiFi
-fallback is not taken (ADR 0011). INDI 2.2.4 and the three third-party components
-(`libasi`, `indi-asi`, `indi-eqmod`) are built and installed on the Pi. Everything learned
-in the process is in [`docs/FIELD-NOTES-M1.md`](docs/FIELD-NOTES-M1.md), which is evidence
-rather than instruction: where it contradicts this file or SPEC.md, the contradiction is
-the point.
+**Done, on real hardware.** All five devices pass. The Wave 150i connects to
+`indi_eqmod_telescope` over direct USB serial with no SynScan bridge — the M1 HITL mount
+test **passed** and the WiFi fallback is not taken (ADR 0011). The ASI533MM cools and
+captures, the EFW cycles, the EAF moves and reports temperature, the ASI120MM Mini
+reports. The full stack is built and installed on the Pi: INDI 2.2.4, the three
+third-party components (`libasi`, `indi-asi`, `indi-eqmod`), StellarSolver 2.8 and
+**KStars 3.8.3**. `install.sh` has run end to end and `--check` passes clean.
+
+Everything learned is in [`docs/FIELD-NOTES-M1.md`](docs/FIELD-NOTES-M1.md), in three
+parts: the mount, the four remaining devices, and the build. It is evidence rather than
+instruction — where it contradicts this file, SPEC.md or an ADR, the contradiction is the
+point, and in part three it contradicts ADR 0008.
 
 **Done, against simulators.** Config schemas, the INDI client, the Ekos DBus bridge, the
-safety governor skeleton, the mount bring-up sequence, and CI (ruff, mypy --strict,
-shellcheck, pytest against real simulator drivers).
+safety governor skeleton, the device bring-up mechanism (`executor/link.py` — one
+mechanism for all five devices, no special case for the mount), and CI (ruff,
+mypy --strict, shellcheck, pytest against real simulator drivers).
 
-**Outstanding for M1.**
+**Outstanding for M1.** Nothing.
 
-- Bench tests for the camera, filter wheel, focuser and guide camera. Operator, on the rig.
-- KStars is **not built**. Its tag and commit SHA are unresolved, and `install.sh` refuses
-  to guess one. Nothing Ekos-dependent can be verified until it is.
-- The Qt6/KF6 package names in `install.sh` are unverified against Trixie.
-- `install.sh` has never been run end to end.
-
-Do not work around any of those four. They are the operator's to resolve.
+**The next thing, and it is not M2.** [Issue #2](https://github.com/alexcatesp/nocturne/issues/2):
+every Ekos DBus method name in `executor/ekos.py` is a guess made without a KStars to
+ask, and `fake_kstars.py` is a stub that shares the bridge's assumptions. KStars now
+exists on the rig, so the interface can be read rather than guessed.
+[`docs/ekos-dbus-capture.md`](docs/ekos-dbus-capture.md) is the capture procedure; its
+output belongs in `backend/tests/fixtures/hardware/` with the same standing as the INDI
+property dumps. Replacing guesses with recorded evidence is M1 closing work. *Using* the
+interface — align, focus, guide, capture, flip — is M2 and does not start.
 
 **Known limitations, each with a red test or a tracked issue.** `SetProperty` is
 ungated, so a raw property write can still slew the mount (ADR 0007, issue #1, three

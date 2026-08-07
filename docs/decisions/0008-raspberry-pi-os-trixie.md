@@ -3,6 +3,8 @@
 Status: Accepted · 2026-08-05 · Milestone M1
 Premise confirmed by measurement on the reference rig, 2026-08-07 — see
 Consequences.
+**Amended 2026-08-07 after KStars was actually built: having KF6 is necessary
+and not sufficient. See "Trixie is not enough on its own".**
 Supersedes the OS row of SPEC section 4, which named Bookworm.
 
 ## Context
@@ -61,8 +63,60 @@ a specific reason, not an hour into a build:
    that cannot supply KF6 at all, and a package name in this script that is
    wrong for the release in front of it.
 
-Both checks are skipped when `--skip-kstars` is passed, because then no Qt6 or
-KF6 is needed.
+The KF6 half of both checks is skipped when `--skip-kstars` is passed. The Qt6
+half is not: StellarSolver is a Qt6 library and is built either way.
+
+## Trixie is not enough on its own — `-DBUILD_WITH_QT6=ON`
+
+**This ADR's premise was right and incomplete, and the gap between the two is a
+build that cannot complete.** Recorded here rather than as a footnote, because
+"Trixie ships KF6, therefore KStars builds" is exactly what this document said
+and it is not true.
+
+KStars 3.8.3, `CMakeLists.txt` line 17:
+
+```cmake
+option(BUILD_WITH_QT6 "Build using Qt6" OFF)
+```
+
+**The default is OFF.** Without the flag, configure looks for Qt5 5.12.7 —
+and Trixie ships no Qt5 at all. So on the platform chosen *because* it ships Qt6
+and KF6, the KStars build is impossible unless KStars is told to use them.
+Having the packages available and having KStars use them are two different
+things, and only the first was checked when this decision was written.
+
+`build_kstars()` therefore configures with:
+
+```
+-DBUILD_WITH_QT6=ON -DBUILD_TESTING=OFF
+```
+
+**And verifies the option exists before passing it.** CMake ignores a `-D` for a
+variable no `CMakeLists.txt` declares — it mentions it at the end of the
+configure log under "Manually-specified variables were not used by the project",
+and nothing fails. If `BUILD_WITH_QT6` is renamed upstream, passing it becomes a
+silent no-op and the build falls back to hunting for Qt5: the original failure,
+disguised as a flag that was set. `require_qt6_option()` greps the checked-out
+tree for the declaration and refuses if it is not there, naming the file and the
+grep that would find its replacement.
+
+### Optional dependencies that stay absent
+
+KStars' configure warns about four things it cannot find and builds without them.
+All four are for features a headless imaging box does not have:
+
+| Absent | For |
+|---|---|
+| `Qt6DataVisualization` | 3D charts in the GUI |
+| `Qt6Keychain` | credential store for online services |
+| `LibXISF` | PixInsight's native image format |
+| `Cups` | printing |
+
+**Not installing them is the decision, not an oversight.** A clean configure log
+is a tempting thing to chase and chasing this one adds four dependencies to a
+machine that has to survive unattended nights, in exchange for nothing. The list
+is repeated as a comment beside the package arrays in `install.sh`, which is
+where someone would go to add them.
 
 ## Consequences
 
@@ -93,11 +147,17 @@ KF6 is needed.
   this decision exists — so the reasoning above is confirmed by observation
   rather than resting on the release notes.
 
-- **Those five are a sample, not the list.** `QT6_BUILD_PACKAGES` and
-  `KF6_BUILD_PACKAGES` hold twenty-four names between them; nineteen remain
-  unverified against Trixie, and one wrong name stops an install. The preflight
-  already sorts every name into installed / available / unknown-to-apt, so a
-  wrong one is reported by name in seconds rather than an hour into a build.
-  `./scripts/install.sh --check-packages` answers the same question on demand,
-  printing only the names apt does not recognise and nothing at all if the list
-  is clean.
+- **Those five were a sample, not the list.** The whole list has since been
+  checked in one go on the reference rig — `./scripts/install.sh
+  --check-packages` printed nothing, which is the all-clear — and KStars 3.8.3
+  then built and installed. Every name in the arrays is correct for Trixie.
+- **`--check-packages` was checking a list nothing installed.** Reporting the
+  Qt6/KF6 names as available is not the same as installing them, and for the
+  first end-to-end run of the installer it was mistaken for exactly that: the
+  check passed, the compile started, and the Qt6 set was still not on the
+  machine. That defect and its fix are in `docs/FIELD-NOTES-M1.md` section 14;
+  what it changes here is that both checks described above now read
+  `required_packages()`, the same function the install stage installs from.
+- **The KF6 packages are a build dependency of KStars, and Qt6 is a build
+  dependency of StellarSolver too.** `--skip-kstars` therefore drops KF6 and
+  `libopencv-dev` but keeps Qt6 and `wcslib-dev`.

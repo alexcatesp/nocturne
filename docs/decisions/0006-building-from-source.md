@@ -163,17 +163,27 @@ authoritative remote. `invent.kde.org` remains unreachable from the development
 environment (`CONNECT tunnel failed, response 403`, re-checked the same day),
 which is why the capture happened on the Pi rather than here.
 
-**What this pin is, precisely.** It is *the state of the 3.8.3 stable line at the
-moment it was captured* — **not** the 3.8.3 release tree. Those differ. KStars
-3.8.3 was released 1 June 2026; `stable-3.8.3` is a maintenance branch and may
-have taken post-release fixes since. There is no tag marking the release point,
-so there is nothing to pin to that would mean "the release" instead.
+**What this pin is, precisely — and this is now read from the tree, not
+inferred.** It is *the state of the 3.8.3 stable line at the moment it was
+captured*, **not** the 3.8.3 release tree. Those differ. KStars 3.8.3 was
+released 1 June 2026; `stable-3.8.3` is a maintenance branch and takes
+post-release fixes. There is no tag marking the release point, so there is
+nothing to pin to that would mean "the release" instead.
 
-That is almost certainly what is wanted — stable-line fixes on top of a release
-are the reason the branch exists — but the distinction is recorded here rather
-than left as an ambiguity behind the label "3.8.3", because the two readings
-diverge the moment anyone asks "is this the released 3.8.3?". The answer is no:
-it is 3.8.3 plus whatever the maintainers had added by 2026-08-07.
+The checked-out tree declares its own version, which closes the question this
+ADR previously had to leave open:
+
+```
+CMakeLists.txt   PROJECT(kstars VERSION 3.8.3 ...)
+commit           61d849b0, 2026-06-14, "INDI drivers sync"
+```
+
+So the pin is **3.8.3 plus post-release fixes to the stable line**, dated two
+weeks after the release, and the fix it carries is an **INDI driver sync** —
+which is the single most relevant post-release change this project could have
+asked for. The cautious framing above was correct and is now a statement of fact
+rather than an inference. Measured on the reference rig, 2026-08-07
+(`docs/FIELD-NOTES-M1.md` section 16).
 
 The capture date is therefore part of the pin, not metadata about it. Re-taking
 the SHA later gives a different tree and needs a new date beside it.
@@ -223,21 +233,27 @@ loudly and records the branch name in the lock file.
   interrupted build resumes; and it is a one-off per machine, not per session.
 - Upgrading INDI is an edit to one variable at the top of the installer,
   followed by a rebuild — deliberate, not incidental.
-- **The KStars pin is a branch head with a date, not a release.** The guard
-  confirms HEAD *is* that commit; nothing confirms that commit *is* the 3.8.3
-  release, because it is not — it is the 3.8.3 line as of 2026-08-07. Running
-  `kstars --version` after the build is what ties the built tree back to a
-  version number, and the installation guide states the expected output.
+- **The KStars pin is a branch head with a date, not a release** — and it is
+  now known to be 3.8.3, rather than assumed to be. The guard confirms HEAD *is*
+  that commit; `CMakeLists.txt` in that commit declares
+  `PROJECT(kstars VERSION 3.8.3 ...)`, and `kstars --version` on the built
+  binary agrees. The caveat this bullet used to carry — that nothing tied the
+  commit to a version number — is discharged. What remains true, and is the
+  reason the date stays in the pin, is that it is the 3.8.3 *line* as of
+  2026-08-07 and not the release tree.
 - Pinning to a branch head means a future `stable-3.8.3` commit — a backport, a
   translation update — breaks the build until the pin is re-taken. That is the
   intended behaviour and the error says so, but it is a maintenance cost that a
   tag would not have carried.
-- **The installer has still never been run end to end.** The stages were
-  performed by hand on the reference rig, following `docs/installation.md`, and
-  everything that went wrong in the process is now folded back into the script
-  (ADR 0009, and field notes section 5). That is not the same as the script
-  having run: its syntax, option handling, pinning guard, `-Werror` patch and
-  `--check` path are tested, the compilation stages are not.
+- **The installer has now been run end to end, and it failed five times.** All
+  five were one defect — it verified dependencies without installing them — and
+  all five are fixed (field notes section 14). The pinning machinery this ADR is
+  about came through unchanged: the fetch, the SHA verification and
+  `versions.lock` all behaved as specified on a real run rather than only in
+  tests. What the run found was upstream of pinning entirely, in apt.
+- The whole build completes: INDI 2.2.4, indi-3rdparty 2.2.4, StellarSolver 2.8
+  and KStars 3.8.3, on Trixie, from these pins. `--check` passes clean
+  afterwards. That closes the last unverified claim in this ADR.
 - The measured versions above close the "check this on the Pi" action this ADR
   opened. Nothing in Trixie can be used, so the full source build is not a
   precaution — it is the only route.

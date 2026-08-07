@@ -21,7 +21,14 @@ Environment=HOME=/home/nocturne
 
 # dbus-run-session gives KStars a session bus of its own, so that the bridge has
 # something to attach to whether or not anyone is logged in.
-ExecStart=/usr/bin/dbus-run-session -- /usr/local/bin/kstars
+#
+# `kstars` unqualified, resolved by dbus-run-session through PATH, and not an
+# absolute path. This line read /usr/local/bin/kstars, which is where nothing
+# installs it: the installer builds with CMAKE_INSTALL_PREFIX=/usr so that one
+# libindi exists on the machine rather than two (see install.sh, INSTALL_PREFIX),
+# and the reference rig's build went to /usr/bin. The unit would have failed to
+# start, at night, with status=203/EXEC.
+ExecStart=/usr/bin/dbus-run-session -- kstars
 
 Restart=on-failure
 RestartSec=10

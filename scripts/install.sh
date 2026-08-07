@@ -148,7 +148,7 @@ readonly KF6_BUILD_PACKAGES=(
 # Deliberately NOT installed. KStars' configure step warns about each of these
 # and builds without them; every one is for a feature a headless imaging box has
 # no use for. They are listed so that nobody adds them chasing a clean configure
-# log, which is the only reason anyone would (docs/FIELD-NOTES-M1.md section 15):
+# log, which is the only reason anyone would (docs/FIELD-NOTES-M1.md section 17):
 #
 #   Qt6DataVisualization   3D charts in the GUI
 #   Qt6Keychain            credential store for online services

@@ -431,3 +431,193 @@ Once it builds, [issue #2](https://github.com/alexcatesp/nocturne/issues/2) open
 introspect the live DBus interface, replace every guessed method name, add the
 Optical Trains interface from 3.8.2, and rebuild `fake_kstars.py` from captured
 introspection XML rather than from assumptions.
+
+---
+---
+
+# Field Notes — M1, part three: the build
+
+**Recorded 2026-08-07, on the reference rig.** Same standing as parts one and two:
+evidence, not instruction. Where it contradicts SPEC.md, a config file or an ADR,
+the contradiction is the point — and in §15 it contradicts an ADR.
+
+---
+
+## 14. HEADLINE: M1 is complete, and `install.sh` had never really run
+
+**KStars 3.8.3 builds and installs. `--check` passes clean.** Every M1 criterion,
+AUTO and HITL, is now met.
+
+The installer ran end to end for the first time in the process, and **failed five
+times**. Five failures, one defect: *it verified dependencies without installing
+them.* Each stopped a configure step, in this order:
+
+| Missing | Stopped | Why it was missing |
+|---|---|---|
+| `wcslib-dev` | StellarSolver, then KStars | installed one stage later, inside `build_kstars` |
+| `libeigen3-dev` | same | same |
+| the Qt6 set | KStars | verified by `--check-packages`, never installed |
+| the KF6 set | KStars | same |
+| `libopencv-dev` (>= 4.6.0, ~500 MB) | KStars | named nowhere at all |
+
+The shape of it is the part worth keeping. The Qt6 and KF6 names were in
+`QT6_BUILD_PACKAGES` and `KF6_BUILD_PACKAGES`, which `--check-packages` read and
+reported clean on — a genuine, correct, useful check. Nothing then ran `apt-get
+install` on them at a point where it mattered. **Verifying a dependency is not
+installing it**, and a check that passes is easily mistaken for a machine that is
+ready.
+
+`wcslib-dev` and `libeigen3-dev` are the same defect from the other direction:
+they were installed, but from a second list, inline inside `install_kstars_
+dependencies()`, which `--check-packages` could not see and which ran a stage
+*after* StellarSolver needed them. Two lists, and they had diverged.
+
+`libopencv-dev` was in neither. There is no check that would have caught it,
+because it was not a name anything knew about.
+
+**What changed.** One array set at the top of the script, one function
+(`required_packages()`) that reads them, and three consumers — the preflight
+gate, `--check-packages`, and a single install stage that runs before any
+compiler. "Checked but not installed" is no longer a thing the script can
+express. `backend/tests/unit/test_install_packages.py` runs the real check and
+the real install against a stubbed apt and compares the two sets; its positive
+control is a variant of the script where an install stage smuggles in a package
+of its own, which is the original bug exactly.
+
+An hour of compilation is a slow way to find a two-second `apt-get`.
+
+---
+
+## 15. KStars needs `-DBUILD_WITH_QT6=ON`, and ADR 0008 did not know it
+
+**This is the important one.**
+
+KStars 3.8.3, `CMakeLists.txt` line 17:
+
+```cmake
+option(BUILD_WITH_QT6 "Build using Qt6" OFF)
+```
+
+**Default OFF.** Without the flag, configure looks for Qt5 5.12.7. Trixie ships no
+Qt5 at all. So on the platform this project deliberately chose *because it ships
+KF6*, the KStars build is impossible unless KStars is told to use it.
+
+What was built by hand, and what the installer now does:
+
+```bash
+cmake -B ../kstars-build -S . \
+  -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_WITH_QT6=ON -DBUILD_TESTING=OFF
+```
+
+**This contradicts the premise of ADR 0008.** That ADR chose Trixie because it
+ships packaged KF6 rather than KF5, and that reasoning was right — the packages
+are there, measured (0008, Consequences). What nobody checked is that KStars has
+to be *told* to use them. The ADR reads as though having KF6 available is
+sufficient. It is necessary and not sufficient, and the gap between those two is
+a build that cannot complete. ADR 0008 now carries the flag as a decision rather
+than a footnote.
+
+**The second-order problem, which is worse than the first.** CMake ignores `-D`
+for a variable no `CMakeLists.txt` declares. It notes it at the end of the
+configure log, under "Manually-specified variables were not used by the project",
+and nothing fails. So if `BUILD_WITH_QT6` is ever renamed upstream, passing it
+becomes a silent no-op and the build falls back to looking for Qt5 — the original
+failure, now disguised as a flag that was set. `require_qt6_option()` reads the
+checked-out tree and refuses if the option is not declared in it.
+
+---
+
+## 16. The KStars pin is now verified from inside the tree
+
+ADR 0006 recorded a caveat: the guard confirms HEAD *is* commit `61d849b0`, but
+nothing confirmed that commit *is* 3.8.3. **The checked-out tree declares its own
+version**, so the caveat is discharged:
+
+```
+CMakeLists.txt:  PROJECT(kstars VERSION 3.8.3 ...)
+commit           61d849b0, 2026-06-14, "INDI drivers sync"
+```
+
+3.8.3 was released 1 June 2026. The pinned commit is dated **two weeks after**,
+and the change it carries is an **INDI driver sync** — which is the single most
+relevant post-release fix this project could ask for.
+
+So the pin is: 3.8.3, plus post-release fixes to the stable line, and the fix it
+carries is one we want. The cautious framing in ADR 0006 — "3.8.3 plus whatever
+the maintainers had added" — was correct, and can now be stated as fact rather
+than inference. It is stated as fact in ADR 0006 and the caveat is removed.
+
+---
+
+## 17. Four optional dependencies, deliberately absent
+
+KStars' configure step warns about each of these and builds without them. All
+warnings, none blocking, **none needed on a headless imaging box**:
+
+| Absent | What it is for |
+|---|---|
+| `Qt6DataVisualization` | 3D charts in the GUI |
+| `Qt6Keychain` | credential store for online services |
+| `LibXISF` | PixInsight's native image format |
+| `Cups` | printing |
+
+Recorded because a clean configure log is a tempting thing to chase, and chasing
+this one adds four dependencies to an unattended imaging computer in exchange for
+nothing. The list is repeated as a comment in `install.sh` beside the package
+arrays, where someone would go to add them.
+
+If one ever becomes necessary it belongs in an array with a reason beside it, not
+in an `apt-get` somewhere in the body.
+
+---
+
+## 18. Storage
+
+**KStars consumed roughly 9 GB of build artefacts.** After cleanup: **13.9 GB free
+of 28.1 GB**, with 39 astrometry index files installed.
+
+A build that runs out of space dies at around 80 %, which is an hour spent to
+arrive at a preventable error, with a large tree left behind. The installer now
+projects the requirement before the KStars stage and refuses rather than starting:
+
+```
+info: KStars needs about 10 GB of build artefacts; 13 GB free under ~/.cache/nocturne-build
+```
+
+10 GB, not 9: the ~0.5 GB of `libopencv-dev` is part of the same stage, and the
+number should be the one that makes the stage safe rather than the one that was
+measured for part of it.
+
+The preflight's `REQUIRED_DISK_GB=12` still gates the whole install up front. The
+KStars check is separate because it is the one stage that can exhaust the disk on
+its own, and because by the time it runs the earlier stages have spent some.
+
+---
+
+## 19. What `--check` reports on a complete install
+
+Clean, and the three guards all announce themselves rather than staying quiet:
+
+- filter order reads `1:L 2:R 3:G 4:B 5:Dark` — the corrected order from §10.1
+- the mount port defers to the driver — `port: null`, as shipped
+- **removable-flash stacking refusal**, **meridian not calibrated**, and
+  **coordinates still placeholder** all fire
+
+The placeholder-coordinates warning did exactly what it was designed to do: the
+shipped `config/equipment.yaml` carries a generic reference site, and the warning
+is what stops that being mistaken for a configured one.
+
+---
+
+## 20. What remains
+
+Nothing in M1.
+
+[Issue #2](https://github.com/alexcatesp/nocturne/issues/2) is open: KStars is
+installed and its DBus interface can be introspected on live hardware. The source
+tree is at `~/.cache/nocturne-build/kstars`.
+
+The capture procedure is `docs/ekos-dbus-capture.md`. Its output belongs in
+`backend/tests/fixtures/hardware/`, and `fake_kstars.py` gets rebuilt from it
+rather than from assumptions.

@@ -145,12 +145,41 @@ path.
 
 ## 5. Build dependencies
 
+**Install all of them now, before any build.** Not per component: the first end-to-end
+run of the installer failed five times because dependencies were installed by the stage
+that needed them, and by then the *previous* stage had already stopped. Each failure cost
+an hour of compilation to reach a two-second `apt-get` (`docs/FIELD-NOTES-M1.md` §14).
+
+If you are following this guide by hand rather than running `scripts/install.sh`, the
+one list that is guaranteed to match what the installer uses is the installer's own:
+
 ```bash
-sudo apt install -y git cmake build-essential libnova-dev libcfitsio-dev \
-  libusb-1.0-0-dev zlib1g-dev libgsl-dev libjpeg-dev libcurl4-gnutls-dev \
-  libtiff-dev libfftw3-dev libev-dev libgps-dev libraw-dev libftdi-dev \
-  libdc1394-dev libgphoto2-dev libboost-regex-dev libtheora-dev
+./scripts/install.sh --check-packages
 ```
+
+It prints nothing when every name is available on this release. The full set is:
+
+```bash
+sudo apt install -y --no-install-recommends \
+  git cmake build-essential pkg-config \
+  libnova-dev libcfitsio-dev libusb-1.0-0-dev zlib1g-dev libgsl-dev \
+  libjpeg-dev libcurl4-gnutls-dev libtheora-dev libfftw3-dev \
+  libev-dev libavcodec-dev libavdevice-dev libraw-dev libgphoto2-dev \
+  libftdi1-dev libdc1394-dev libgps-dev librtlsdr-dev \
+  python3-venv python3-dev siril \
+  wcslib-dev libeigen3-dev libopencv-dev
+```
+
+The last three are the ones that are easy to miss and expensive to discover:
+
+| Package | Needed by | Notes |
+|---|---|---|
+| `wcslib-dev` | StellarSolver, then KStars | stopped the first real run first |
+| `libeigen3-dev` | StellarSolver, then KStars | same stage |
+| `libopencv-dev` | KStars | requires >= 4.6.0, about 500 MB installed |
+
+Qt6 and KF6 are in §10.1 — they are needed for StellarSolver and KStars, not for INDI,
+and they are the largest part of the list.
 
 ---
 
@@ -434,11 +463,11 @@ focuser should report an absolute position and a temperature.
 
 ## 10. StellarSolver and KStars
 
-*This section is provisional — KStars has not yet been built on the reference rig.*
+*Performed on the reference rig, 2026-08-07. KStars 3.8.3 builds and installs.*
 
 ### 10.1 Check every package name first
 
-One command, and it checks all twenty-four names the build needs:
+One command, and it checks every name the build needs:
 
 ```bash
 ./scripts/install.sh --check-packages
@@ -470,8 +499,51 @@ introduced the Optical Trains DBus interface that Nocturne's executor targets.
 KStars is pinned to a **commit**, not a tag, because KStars does not tag modern
 releases — its tags stop at `v17.08.3`. The installer pins
 `61d849b04c42217cf2f0ab956153e56a928ae8a8`, the head of `stable-3.8.3` as of
-2026-08-07. That is the 3.8.3 stable *line* at that date, which is 3.8.3 plus any
-post-release fixes — not the release tree itself. See ADR 0006.
+2026-08-07. That is the 3.8.3 stable *line* at that date: 3.8.3 plus post-release
+fixes, the newest of them an INDI driver sync. See ADR 0006.
+
+#### `-DBUILD_WITH_QT6=ON` is mandatory
+
+KStars 3.8.3 defaults `option(BUILD_WITH_QT6 ...)` to **OFF** (`CMakeLists.txt` line 17).
+Without it, configure looks for **Qt5 5.12.7**, and Trixie ships no Qt5 at all — so the
+build fails on the very platform this guide requires. This is the exact invocation used
+on the reference rig:
+
+```bash
+cd ~/src/kstars
+cmake -B ../kstars-build -S . \
+  -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_WITH_QT6=ON -DBUILD_TESTING=OFF
+cmake --build ../kstars-build -j"$(nproc)"
+sudo cmake --install ../kstars-build
+```
+
+If configure reports it cannot find **Qt5**, this flag is what is missing. Nothing else
+produces that message on Trixie.
+
+`/usr`, not `/usr/local`: KStars, the INDI drivers and pkg-config all have to agree on
+one prefix, and Debian's own packages live in `/usr` (§6.1).
+
+#### Space
+
+**Budget 10 GB free before starting.** The KStars build tree reached about 9 GB on the
+reference rig, plus ~0.5 GB for `libopencv-dev`. A build that runs out of space dies at
+around 80 %, an hour in. `scripts/install.sh` projects this and refuses rather than
+starting; by hand, check first:
+
+```bash
+df -BG ~/src
+```
+
+Afterwards, delete the build tree: `rm -rf ~/src/kstars-build`. The reference rig
+finished with 13.9 GB free of 28.1 GB, with 39 astrometry index files installed.
+
+#### Warnings you should not act on
+
+Configure warns that it cannot find `Qt6DataVisualization`, `Qt6Keychain`, `LibXISF` and
+`Cups`. **All four are expected and none is installed on purpose** — 3D charts, a
+credential store, PixInsight's image format and printing, on a headless imaging box. Do
+not chase a clean configure log. See ADR 0008.
 
 Expect this to be the longest build of the installation.
 
@@ -496,9 +568,21 @@ The exact string may carry a build suffix; the part that matters is **`3.8.3`**.
 - If it reports **anything below 3.8.2**, stop. Nothing Ekos-dependent will work
   correctly, and it will fail in ways that look like Nocturne bugs.
 
-This check is the only thing tying the built tree back to a version number: the installer
-verifies it checked out the commit it was told to, but nothing in it can confirm that
-commit *is* 3.8.3. That is what this command is for.
+This check ties the built binary back to a version number. The source tree says the same
+thing — `PROJECT(kstars VERSION 3.8.3 ...)` at the top of its `CMakeLists.txt` — so the
+pin, the tree and the binary all agree, and none of it rests on the branch name.
+
+---
+
+## 10.4 What comes next: the Ekos DBus capture
+
+KStars being installed is what unblocks
+[issue #2](https://github.com/alexcatesp/nocturne/issues/2): every Ekos DBus method name
+in the bridge is currently a guess made without a KStars to ask.
+
+`docs/ekos-dbus-capture.md` is the procedure — 15 minutes, read-only, and it commands no
+equipment. Its output goes into `backend/tests/fixtures/hardware/` and the guesses are
+replaced with what the machine says.
 
 ---
 
@@ -526,6 +610,8 @@ Recorded from the reference rig, August 2026.
 | INDI core | v2.2.4 | Built from source |
 | indi-3rdparty | v2.2.4 (`64fbe2e2dcded132e107d764d4965e034b810a3f`) | Built from source |
 | StellarSolver | 2.8 | Built from source |
-| KStars | 3.8.3 | Built from source |
+| KStars | 3.8.3 (`61d849b04c42217cf2f0ab956153e56a928ae8a8`, `stable-3.8.3` head 2026-08-07) | Built from source, `-DBUILD_WITH_QT6=ON` |
+| Qt6 | 6.8.2+dfsg-9+deb13u2 | `trixie/main` |
+| KDE Frameworks 6 | 6.13.0 | `trixie/main` |
 | Mount baud rate | 115200 | — |
 | Mount device | `/dev/ttyACM0` (CDC-ACM, STM32 VCP) | — |
