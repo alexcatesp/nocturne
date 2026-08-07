@@ -98,10 +98,14 @@ grep -o 'org\.kde\.[a-zA-Z0-9._-]*' dbus-names.txt | sort -u
 
 **Expected:** `org.kde.kstars`.
 
-**Please look at this output and tell me what it says.** If it also prints something like
-`org.kde.kstars-1234`, that matters more than it looks: the bridge attaches to a fixed
-name, and a version of KStars that only registers a per-process one would make it fail
-in a way that looks like KStars not running.
+**Observed on the reference rig, 2026-08-07: `org.kde.kstars`, and nothing else.** One
+fixed well-known name, no per-process `org.kde.kstars-<pid>`. That settles a real
+question rather than a formality: `backend/nocturne/executor/ekos.py` attaches to a fixed
+name, and a KStars that registered only a per-process one would fail in a way that reads
+as "KStars is not running". It does not. This is the one assumption in the bridge that
+is now verified against the hardware.
+
+Re-check it if the KStars pin ever moves — it is a property of the build, not of DBus.
 
 ### 3b. The whole object tree, before Ekos is started
 
