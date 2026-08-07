@@ -217,6 +217,7 @@ optical_trains:
 
 imaging_camera:
   indi_driver: "indi_asi_ccd"
+  indi_device_name: "ZWO CCD ASI533MM Pro"
   name: "ZWO CCD ASI533MM Pro"
   pixel_size_um: 3.76
   width_px: 3008
@@ -229,6 +230,9 @@ imaging_camera:
     ramp_c_per_min: 2.0          # never exceed; TEC longevity
     settle_tolerance_c: 0.5
     settle_timeout_s: 600
+  # Applied to CCD_CONTROLS on connect and after every reconnection. The 533MM
+  # ships at Gain 200, Offset 1 — driver defaults, not configuration (§11).
+  offset: 1
   gain_profiles:                 # measured values; see docs/sensor-characterisation.md
     - name: "hcg"
       gain: 100
@@ -238,21 +242,34 @@ imaging_camera:
 
 filter_wheel:
   indi_driver: "indi_asi_wheel"
+  indi_device_name: "ZWO EFW"
+  # Verified physically 2026-08-07 by opening the wheel — docs/FIELD-NOTES-M1.md
+  # §10.1. The earlier order here was wrong in every slot. Nocturne WRITES these
+  # names into the driver on connect and never reads the driver's own, which are
+  # ZWO factory defaults matching nothing in the wheel (§10.2).
   slots:
-    1: { name: "Dark",  type: "dark",       offset_steps: 0 }
-    2: { name: "L",     type: "luminance",  offset_steps: 0 }
-    3: { name: "R",     type: "red",        offset_steps: 0 }
-    4: { name: "G",     type: "green",      offset_steps: 0 }
-    5: { name: "B",     type: "blue",       offset_steps: 0 }
+    1: { name: "L",     type: "luminance",  offset_steps: 0 }
+    2: { name: "R",     type: "red",        offset_steps: 0 }
+    3: { name: "G",     type: "green",      offset_steps: 0 }
+    4: { name: "B",     type: "blue",       offset_steps: 0 }
+    5: { name: "Dark",  type: "dark",       offset_steps: 0 }
     6: { name: null,    type: "empty" }
     7: { name: null,    type: "empty" }
     8: { name: null,    type: "empty" }
 
 focuser:
   indi_driver: "indi_asi_focuser"
-  backlash_steps: 0              # measured; see M2 procedure
+  indi_device_name: "ZWO EAF"
+  # The EAF ships FOCUS_BACKLASH_STEPS=180 with compensation off. 180 is a ZWO
+  # default, not a measurement — and neither was the 0 previously specified here,
+  # which was worse because it looked like one (docs/FIELD-NOTES-M1.md §12).
+  backlash_steps: null           # measure in M2; distinguish from the default
   step_size_um: null             # measured
-  max_position: 60000
+  # Unset means "whatever the driver reports", which is authoritative: the EAF
+  # reports FOCUS_MAX.FOCUS_MAX_VALUE=100000 from the hardware. The 60000
+  # previously specified here had no provenance. Set this only to impose a
+  # TIGHTER limit; a looser one is refused at bring-up, never clamped.
+  max_position: null
   temperature_compensation:
     enabled: false               # enable only after coefficient measured
     coefficient_steps_per_c: null
@@ -267,10 +284,13 @@ guiding:
   mode: "guidescope"             # "guidescope" | "oag"
   camera:
     indi_driver: "indi_asi_ccd"
+    indi_device_name: "ZWO CCD ASI120MM Mini"
     name: "ZWO CCD ASI120MM Mini"
     pixel_size_um: 3.75
     width_px: 1280
     height_px: 960
+    gain: 50                     # applied on connect; the driver default is also 50
+    offset: 0
   focal_length_mm: 120
   exposure_s: 2.0
   calibration_step_ms: 1500
@@ -287,6 +307,7 @@ guiding:
 
 mount:
   indi_driver: "indi_eqmod_telescope"
+  indi_device_name: "EQMod Mount"   # what the DRIVER calls it, not what you do
   device_label: "Wave 150i"
   connection: "serial"           # USB serial preferred over WiFi
   # CDC-ACM, not a USB-serial bridge: the Wave 150i is an STM32 virtual COM

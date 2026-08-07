@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import copy
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 from pydantic import ValidationError
@@ -89,7 +89,9 @@ class TestShippedFile:
     def test_filter_wheel_has_eight_slots_five_populated(self, config_dir: Path) -> None:
         wheel = load_equipment_config(config_dir / "equipment.yaml").filter_wheel
         assert sorted(wheel.slots) == [1, 2, 3, 4, 5, 6, 7, 8]
-        assert [wheel.slots[i].name for i in (1, 2, 3, 4, 5)] == ["Dark", "L", "R", "G", "B"]
+        # The order is asserted in TestTheFilterWheelMatchesTheWheel, against
+        # what is physically in it. Here only the shape.
+        assert len(wheel.populated_slots) == 5
         assert all(wheel.slots[i].type == "empty" for i in (6, 7, 8))
 
     def test_mount_is_configured_for_direct_usb_serial(self, config_dir: Path) -> None:
@@ -265,7 +267,14 @@ class TestCrossFieldConsistency:
 
     def test_a_dark_slot_is_required_for_calibration_frames(self, raw: dict[str, Any]) -> None:
         """SPEC section 10.2: darks and dark-flats are captured with the Dark slot."""
-        raw["filter_wheel"]["slots"][1] = {"name": None, "type": "empty"}
+        slots = raw["filter_wheel"]["slots"]
+        # Find it rather than assume where it is. This test used to empty slot 1
+        # because slot 1 was Dark; the wheel says otherwise and the test went
+        # green while emptying the luminance filter instead.
+        dark = [position for position, slot in slots.items() if slot["type"] == "dark"]
+        assert len(dark) == 1, dark
+        slots[dark[0]] = {"name": None, "type": "empty"}
+
         with pytest.raises(ValidationError, match="dark"):
             EquipmentConfig.model_validate(raw)
 
@@ -463,3 +472,83 @@ class TestMountSerialPort:
     def test_the_reference_baud_is_115200(self, config_dir: Path) -> None:
         """The driver starts at 9600; the executor must set this before CONNECT."""
         assert load_equipment_config(config_dir / "equipment.yaml").mount.baud == 115200
+
+
+class TestTheFilterWheelMatchesTheWheel:
+    """docs/FIELD-NOTES-M1.md §10.1 — verified by opening it and reading the glass.
+
+    The earlier order was wrong in every slot. That is worth a test of its own
+    rather than a corrected line, because the failure it produces is silent:
+    frames filed against the wrong channel, and nothing in the image looks wrong.
+    """
+
+    #: Slot -> filter, as physically fitted on 2026-08-07.
+    FITTED: ClassVar[dict[int, str]] = {1: "L", 2: "R", 3: "G", 4: "B", 5: "Dark"}
+
+    def test_the_shipped_order_is_the_order_in_the_wheel(self, config_dir: Path) -> None:
+        wheel = load_equipment_config(config_dir / "equipment.yaml").filter_wheel
+        named = {position: slot.name for position, slot in wheel.populated_slots.items()}
+        assert named == self.FITTED
+
+    def test_the_old_order_is_not_shipped(self, config_dir: Path) -> None:
+        """The regression. Slot 1 was Dark and is L; slot 5 was B and is Dark."""
+        wheel = load_equipment_config(config_dir / "equipment.yaml").filter_wheel
+        assert wheel.slots[1].name != "Dark"
+        assert wheel.slots[5].name != "B"
+
+    def test_the_dark_slot_is_where_the_wheel_has_it(self, config_dir: Path) -> None:
+        wheel = load_equipment_config(config_dir / "equipment.yaml").filter_wheel
+        dark = [pos for pos, slot in wheel.slots.items() if slot.type == "dark"]
+        assert dark == [5]
+
+    def test_it_disagrees_with_every_name_the_driver_shipped(self) -> None:
+        """Positive control for §10.2 — CLAUDE.md §2.
+
+        The point of writing names to the driver is that its own are wrong. If
+        the configured names ever coincided with the ZWO defaults, the tests
+        that check the overwrite would pass whether or not it happened.
+        """
+        zwo_defaults = {
+            1: "Red",
+            2: "Green",
+            3: "Blue",
+            4: "H_Alpha",
+            5: "SII",
+            6: "OIII",
+            7: "LPR",
+            8: "Luminance",
+        }
+        overlapping = [
+            position
+            for position, name in self.FITTED.items()
+            if zwo_defaults.get(position) == name
+        ]
+        assert not overlapping, (
+            f"slots {overlapping} agree with the ZWO factory names, so an "
+            "overwrite test through those slots would prove nothing"
+        )
+
+
+class TestTheDriverIsAuthoritativeForItsOwnLimits:
+    """docs/FIELD-NOTES-M1.md §12."""
+
+    def test_focuser_max_position_is_not_invented(self, config_dir: Path) -> None:
+        """The driver reports 100000; the 60000 that was here came from nowhere."""
+        focuser = load_equipment_config(config_dir / "equipment.yaml").focuser
+        assert focuser.max_position is None
+
+    def test_focuser_backlash_is_unset_rather_than_zero(self, config_dir: Path) -> None:
+        """0 looked like a measurement. It was not, and the EAF ships 180."""
+        focuser = load_equipment_config(config_dir / "equipment.yaml").focuser
+        assert focuser.backlash_steps is None
+
+    def test_the_imaging_bit_depth_is_the_converter_not_the_container(
+        self, config_dir: Path
+    ) -> None:
+        """CCD_INFO.CCD_BITSPERPIXEL reads 16. The IMX533 ADC is 14-bit.
+
+        SPEC §2.1 is right and the driver is reporting the container size. This
+        test exists so that nobody "corrects" the config to match the driver.
+        """
+        camera = load_equipment_config(config_dir / "equipment.yaml").imaging_camera
+        assert camera.bit_depth == 14

@@ -38,6 +38,7 @@ optical_trains:
 
 imaging_camera:
   indi_driver: "indi_asi_ccd"
+  indi_device_name: "ZWO CCD ASI533MM Pro"
   name: "ZWO CCD ASI533MM Pro"
   pixel_size_um: 3.76
   width_px: 3008
@@ -50,6 +51,10 @@ imaging_camera:
     ramp_c_per_min: 2.0          # never exceed; TEC longevity
     settle_tolerance_c: 0.5
     settle_timeout_s: 600
+  # Applied to the driver on every connect and after every reconnection. The
+  # 533MM ships at Gain=200 Offset=1 — a driver default, not our configuration
+  # (docs/FIELD-NOTES-M1.md §11). The gain comes from the active gain profile.
+  offset: 1
   gain_profiles:
     # PLACEHOLDERS. SPEC §15 requires these to be measured, not taken from the
     # datasheet: the exposure solver divides by them. Measure with the procedure
@@ -62,21 +67,43 @@ imaging_camera:
 
 filter_wheel:
   indi_driver: "indi_asi_wheel"
+  indi_device_name: "ZWO EFW"
+  # Slot order verified physically on 2026-08-07 by opening the wheel and reading
+  # the filter markings — docs/FIELD-NOTES-M1.md §10.1. Every slot in the earlier
+  # version was wrong; it was a different mapping, not an off-by-one.
+  #
+  # Nocturne WRITES these names into the driver on every connect and never reads
+  # the driver's own back (§10.2). The wheel shipped holding ZWO factory names —
+  # Red, Green, Blue, H_Alpha, SII, OIII, LPR, Luminance — which match nothing in
+  # it. Trusting those would file B frames as H-Alpha, and no image would look
+  # wrong.
+  #
+  # THIS IS THE SOURCE OF TRUTH FOR WHAT IS IN THE WHEEL. If you physically move
+  # a filter, change it here; nothing else knows.
   slots:
-    1: { name: "Dark",  type: "dark",       offset_steps: 0 }
-    2: { name: "L",     type: "luminance",  offset_steps: 0 }
-    3: { name: "R",     type: "red",        offset_steps: 0 }
-    4: { name: "G",     type: "green",      offset_steps: 0 }
-    5: { name: "B",     type: "blue",       offset_steps: 0 }
+    1: { name: "L",     type: "luminance",  offset_steps: 0 }
+    2: { name: "R",     type: "red",        offset_steps: 0 }
+    3: { name: "G",     type: "green",      offset_steps: 0 }
+    4: { name: "B",     type: "blue",       offset_steps: 0 }
+    5: { name: "Dark",  type: "dark",       offset_steps: 0 }
     6: { name: null,    type: "empty" }
     7: { name: null,    type: "empty" }
     8: { name: null,    type: "empty" }
 
 focuser:
   indi_driver: "indi_asi_focuser"
-  backlash_steps: 0              # measured; see M2 procedure
+  indi_device_name: "ZWO EAF"
+  # The EAF ships with FOCUS_BACKLASH_STEPS=180 and the toggle disabled. 180 is a
+  # ZWO default, NOT a measurement — and neither was the 0 that used to be here,
+  # which was worse because it looked like one. Left unset until measured; the M2
+  # procedure must distinguish the default it will find from the value it takes.
+  backlash_steps: null           # measure in M2; see docs/FIELD-NOTES-M1.md §12
   step_size_um: null             # measured
-  max_position: 60000
+  # Omitted on purpose. The driver reports FOCUS_MAX.FOCUS_MAX_VALUE=100000, which
+  # comes from the hardware and is authoritative; the 60000 that used to be here
+  # was invented. Set this only to impose a travel limit TIGHTER than the
+  # driver's — bring-up refuses a value above it rather than silently clamping.
+  max_position: null
   temperature_compensation:
     enabled: false               # enable only after coefficient measured
     coefficient_steps_per_c: null
@@ -91,10 +118,15 @@ guiding:
   mode: "guidescope"             # "guidescope" | "oag"
   camera:
     indi_driver: "indi_asi_ccd"
+    indi_device_name: "ZWO CCD ASI120MM Mini"
     name: "ZWO CCD ASI120MM Mini"
     pixel_size_um: 3.75
     width_px: 1280
     height_px: 960
+    # Applied to the driver on connect and after every reconnection. The driver
+    # ships at exactly these values, but that is coincidence, not agreement.
+    gain: 50
+    offset: 0
   focal_length_mm: 120
   exposure_s: 2.0
   calibration_step_ms: 1500

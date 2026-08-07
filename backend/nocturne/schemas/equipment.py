@@ -68,6 +68,26 @@ PositiveInt = Annotated[int, Field(gt=0)]
 NonNegativeInt = Annotated[int, Field(ge=0)]
 
 
+class IndiDevice(StrictModel):
+    """A device Nocturne addresses over INDI.
+
+    ``indi_device_name`` is the name the *driver* announces itself under, which
+    is equipment-dependent and therefore configuration rather than a constant
+    (CLAUDE.md section 6). All five were read off the running drivers on
+    2026-08-07; see docs/FIELD-NOTES-M1.md sections 1 and 9.
+    """
+
+    indi_driver: str = Field(min_length=1)
+    indi_device_name: str = Field(min_length=1)
+
+    @field_validator("indi_device_name")
+    @classmethod
+    def _device_name_is_not_whitespace(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+
 class Site(StrictModel):
     """Observing site — SPEC section 2.3."""
 
@@ -139,10 +159,9 @@ class GainProfile(StrictModel):
     e_per_adu: PositiveFloat
 
 
-class ImagingCamera(StrictModel):
+class ImagingCamera(IndiDevice):
     """Main imaging camera — SPEC section 5.1."""
 
-    indi_driver: str = Field(min_length=1)
     name: str = Field(min_length=1)
     pixel_size_um: PositiveFloat
     width_px: PositiveInt
@@ -151,6 +170,10 @@ class ImagingCamera(StrictModel):
     mono: bool
     cooled: bool
     cooling: CoolingConfig
+    #: Written to CCD_CONTROLS.Offset on connect. The driver ships its own
+    #: default — 1 on the 533MM — which is not our configuration
+    #: (docs/FIELD-NOTES-M1.md section 11).
+    offset: NonNegativeInt
     gain_profiles: tuple[GainProfile, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -185,10 +208,15 @@ class FilterSlot(StrictModel):
         return self
 
 
-class FilterWheel(StrictModel):
-    """Filter wheel — SPEC section 5.1."""
+class FilterWheel(IndiDevice):
+    """Filter wheel — SPEC section 5.1.
 
-    indi_driver: str = Field(min_length=1)
+    This is the source of truth for what is physically in the wheel. The
+    driver's own FILTER_NAME values are ZWO factory defaults that match nothing
+    in it, and Nocturne overwrites them on connect rather than reading them
+    (docs/FIELD-NOTES-M1.md section 10.2).
+    """
+
     slots: dict[int, FilterSlot] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -245,25 +273,33 @@ class RefocusTriggers(StrictModel):
     on_filter_change: bool
 
 
-class Focuser(StrictModel):
+class Focuser(IndiDevice):
     """Focuser — SPEC section 5.1."""
 
-    indi_driver: str = Field(min_length=1)
-    backlash_steps: NonNegativeInt
+    #: Unset until measured. The EAF ships FOCUS_BACKLASH_STEPS=180, which is a
+    #: ZWO default; the 0 that used to be configured here was worse, because it
+    #: looked like a measurement (docs/FIELD-NOTES-M1.md section 12).
+    backlash_steps: NonNegativeInt | None = None
     step_size_um: PositiveFloat | None = None
-    max_position: PositiveInt
+    #: Unset means "whatever the driver reports", which is authoritative because
+    #: it comes from the hardware — FOCUS_MAX.FOCUS_MAX_VALUE, 100000 on the EAF.
+    #: Set it only to impose a TIGHTER travel limit than the driver's; bring-up
+    #: refuses a value above the driver's rather than clamping silently.
+    max_position: PositiveInt | None = None
     temperature_compensation: TemperatureCompensation
     refocus_triggers: RefocusTriggers
 
 
-class GuideCamera(StrictModel):
+class GuideCamera(IndiDevice):
     """Guide camera — SPEC section 5.1."""
 
-    indi_driver: str = Field(min_length=1)
     name: str = Field(min_length=1)
     pixel_size_um: PositiveFloat
     width_px: PositiveInt
     height_px: PositiveInt
+    #: Written to CCD_CONTROLS on connect (docs/FIELD-NOTES-M1.md section 11).
+    gain: NonNegativeInt
+    offset: NonNegativeInt
 
 
 class DitherConfig(StrictModel):
@@ -309,16 +345,9 @@ class Guiding(StrictModel):
     thresholds: GuideThresholds
 
 
-class Mount(StrictModel):
+class Mount(IndiDevice):
     """Mount — SPEC section 5.1. The M1 HITL subject."""
 
-    indi_driver: str = Field(min_length=1)
-    #: The name the driver announces itself under, which is the driver's name
-    #: for the device and not the operator's: indi_eqmod says "EQMod Mount"
-    #: whatever is bolted to the tripod. It is equipment-dependent, so it is
-    #: configuration and not a constant (CLAUDE.md section 6). Read it off the
-    #: running driver with `indi_getprop | cut -d. -f1 | sort -u`.
-    indi_device_name: str = Field(min_length=1)
     #: What the operator calls it. Display only, and translatable; never used
     #: to address the device.
     device_label: str = Field(min_length=1)
@@ -328,10 +357,10 @@ class Mount(StrictModel):
     slew_rate_max_deg_s: PositiveFloat
     counterweight_fitted: bool
 
-    @field_validator("indi_device_name", "device_label")
+    @field_validator("device_label")
     @classmethod
-    def _names_are_not_whitespace(cls, value: str) -> str:
-        """``min_length`` counts spaces; a name of spaces addresses nothing."""
+    def _label_is_not_whitespace(cls, value: str) -> str:
+        """``min_length`` counts spaces; a label of spaces names nothing."""
         if not value.strip():
             raise ValueError("must not be blank")
         return value
