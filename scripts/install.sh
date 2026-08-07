@@ -27,10 +27,10 @@
 # required version is skipped. Run it again after a failure.
 #
 # Usage:
-#   ./scripts/install.sh                 install everything
-#   ./scripts/install.sh --check         verify an existing install, change nothing
-#   ./scripts/install.sh --check-packages   list Qt6/KF6 names apt does not know
-#   ./scripts/install.sh --help          full option list
+#   ./scripts/install.sh                    install everything
+#   ./scripts/install.sh --check            verify an existing install, change nothing
+#   ./scripts/install.sh --check-packages   list apt names this release does not know
+#   ./scripts/install.sh --help             full option list
 
 set -euo pipefail
 
@@ -90,9 +90,49 @@ readonly REQUIRED_ARCH="aarch64"
 readonly REQUIRED_DEBIAN_VERSION=13
 readonly REQUIRED_DEBIAN_NAME="trixie"
 
-# KStars 3.8.x build dependencies, Debian 13 package names. If a name here is
-# wrong for your release, check_kstars_build_dependencies() names it before any
-# compiler runs — correct it here, in one place.
+# --------------------------------------------------------------------------
+# apt packages. THE ONLY DECLARATION — see required_packages().
+# --------------------------------------------------------------------------
+#
+# Every apt package this installer needs is named in one of the arrays below,
+# and required_packages() is the only thing that reads them. The check and the
+# install both go through it, so the set that is verified is by construction the
+# set that gets installed.
+#
+# It was not always so, and the first end-to-end run failed five times for that
+# one reason: the script verified Qt6/KF6 and installed them from a *different*
+# inline list, one stage too late, while wcslib-dev and libopencv-dev appeared in
+# neither. Verifying a dependency is not installing it, and a list that exists
+# twice diverges. See docs/FIELD-NOTES-M1.md section 14.
+
+# Always needed: INDI core, indi-3rdparty, the Python environment, Siril.
+readonly CORE_BUILD_PACKAGES=(
+    build-essential cmake git pkg-config
+    libnova-dev libcfitsio-dev libusb-1.0-0-dev zlib1g-dev libgsl-dev
+    libjpeg-dev libcurl4-gnutls-dev libtheora-dev libfftw3-dev
+    libev-dev libavcodec-dev libavdevice-dev libraw-dev libgphoto2-dev
+    libftdi1-dev libdc1394-dev libgps-dev librtlsdr-dev
+    python3-venv python3-dev
+    siril
+)
+
+# StellarSolver and KStars both. wcslib-dev is the one that stopped the first
+# real run, at StellarSolver's configure step — an hour in, and it is a
+# two-second apt-get.
+readonly SOLVER_BUILD_PACKAGES=(
+    wcslib-dev libeigen3-dev
+)
+
+# KStars only. libopencv-dev is ~500 MB installed and KStars requires >= 4.6.0;
+# it is not pulled in for a --skip-kstars install.
+readonly KSTARS_EXTRA_PACKAGES=(
+    libopencv-dev
+)
+
+# KStars 3.8.x toolkit, Debian 13 package names. If a name here is wrong for
+# your release, check_apt_packages() names it before any compiler runs —
+# correct it here, in one place. StellarSolver is a Qt6 library too, so the Qt6
+# set is installed even when KStars is skipped.
 readonly QT6_BUILD_PACKAGES=(
     qt6-base-dev qt6-base-dev-tools qt6-declarative-dev qt6-svg-dev
     qt6-tools-dev qt6-tools-dev-tools qt6-positioning-dev qt6-multimedia-dev
@@ -104,7 +144,27 @@ readonly KF6_BUILD_PACKAGES=(
     libkf6newstuff-dev libkf6notifications-dev libkf6plotting-dev
     libkf6widgetsaddons-dev libkf6xmlgui-dev
 )
+
+# Deliberately NOT installed. KStars' configure step warns about each of these
+# and builds without them; every one is for a feature a headless imaging box has
+# no use for. They are listed so that nobody adds them chasing a clean configure
+# log, which is the only reason anyone would (docs/FIELD-NOTES-M1.md section 15):
+#
+#   Qt6DataVisualization   3D charts in the GUI
+#   Qt6Keychain            credential store for online services
+#   LibXISF                PixInsight's native image format
+#   Cups                   printing
+#
+# If one of them ever becomes necessary, it belongs in an array above with a
+# reason beside it, not in an apt-get somewhere in the body.
+
 readonly REQUIRED_DISK_GB=12
+
+# Measured on the reference rig, 2026-08-07: the KStars build tree reached about
+# 9 GB before install, on top of ~0.5 GB for libopencv-dev. The build dies at
+# roughly 80% if the disk runs out, having spent an hour to get there, so this
+# is checked immediately before the stage rather than only in preflight.
+readonly KSTARS_BUILD_GB=10
 readonly PYTHON_MINIMUM="3.11"
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -116,6 +176,7 @@ VERSIONS_LOCK="${BUILD_DIR}/versions.lock"
 INDEX_DIR="${NOCTURNE_INDEX_DIR:-${INDEX_DIR_DEFAULT}}"
 JOBS="$(nproc 2>/dev/null || echo 2)"
 CHECK_ONLY=0
+CHECK_PACKAGES=0
 ALLOW_UNPINNED=0
 SKIP_INDICES=0
 SKIP_KSTARS=0
@@ -139,13 +200,18 @@ warn()  { printf '    %s[warn]%s %s\n' "${C_YELLOW}" "${C_RESET}" "$*" >&2; }
 fail()  { printf '\n%sInstallation failed:%s %s\n' "${C_RED}" "${C_RESET}" "$*" >&2; exit 1; }
 
 usage() {
-    sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    # The whole comment block at the top of this file, up to the first line that
+    # is not a comment. A fixed line range was used here once and silently
+    # stopped matching the block the moment the header grew.
+    awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"
     cat <<'EOF'
 
 Options:
   --check              verify an existing installation and exit
-  --check-packages     print Qt6/KF6 package names apt does not know, and exit.
-                       Silence means the list is good on this release.
+  --check-packages     print the apt package names this release does not know,
+                       and exit. Silence means the list is good on this release.
+                       Honours --skip-kstars: it reports on exactly the set the
+                       install would ask apt for.
   --allow-unpinned     permit an unpinned upstream ref (build is not reproducible)
   --build-dir DIR      where to clone and build (default ~/.cache/nocturne-build)
   --index-dir DIR      where to put astrometry indices (default /usr/share/astrometry)
@@ -468,7 +534,7 @@ preflight() {
     fi
 
     local free_gb
-    free_gb="$(df -BG --output=avail "${HOME}" | tail -n1 | tr -dc '0-9')"
+    free_gb="$(free_gb_under "${HOME}")"
     if [[ -n ${free_gb} ]] && (( free_gb < REQUIRED_DISK_GB )); then
         fail "only ${free_gb} GB free under ${HOME}; the build and the astrometry
     indices need about ${REQUIRED_DISK_GB} GB. SPEC section 2.2 requires NVMe storage:
@@ -488,7 +554,44 @@ preflight() {
     fi
 
     # Before any compiler runs, not an hour into one.
-    check_kstars_build_dependencies
+    check_apt_packages
+}
+
+# Whole gigabytes available on the filesystem holding $1, or empty if df cannot
+# say. Walks up to the nearest existing ancestor: the build directory does not
+# exist yet the first time this is asked.
+free_gb_under() {
+    local path="$1"
+    while [[ -n ${path} && ! -d ${path} ]]; do
+        path="$(dirname "${path}")"
+        [[ ${path} == "/" ]] && break
+    done
+    df -BG --output=avail "${path}" 2>/dev/null | tail -n1 | tr -dc '0-9'
+}
+
+# KStars is the one stage that can fill the disk. On the reference rig its build
+# tree reached about 9 GB, and a build that runs out of space dies at roughly 80%
+# — an hour of compilation spent to arrive at a preventable error. So the space
+# is projected and refused here, before the fetch, rather than discovered later.
+require_space_for_kstars() {
+    local free_gb
+    free_gb="$(free_gb_under "${BUILD_DIR}")"
+    if [[ -z ${free_gb} ]]; then
+        warn "cannot determine free space under ${BUILD_DIR}; KStars needs about ${KSTARS_BUILD_GB} GB"
+        return 0
+    fi
+    info "KStars needs about ${KSTARS_BUILD_GB} GB of build artefacts; ${free_gb} GB free under ${BUILD_DIR}"
+    if (( free_gb < KSTARS_BUILD_GB )); then
+        fail "only ${free_gb} GB free under ${BUILD_DIR}, and the KStars build tree
+    reaches about ${KSTARS_BUILD_GB} GB. Refusing to start it: a build that runs out of
+    space fails at around 80%, an hour in, and leaves the tree behind.
+
+    Free some space and run this again — every stage is idempotent, so nothing
+    already built is repeated. The build trees under ${BUILD_DIR} are deleted
+    after each successful stage and are safe to remove by hand at any time:
+        rm -rf ${BUILD_DIR}/*-build
+    Or pass --skip-kstars to install INDI and Nocturne now and add KStars later."
+    fi
 }
 
 check_os_release() {
@@ -532,20 +635,44 @@ check_os_release() {
     ok "Debian ${VERSION_ID} (${VERSION_CODENAME:-?}) — Qt6/KF6 available"
 }
 
-# Refuse before building anything if the toolkit KStars needs is not obtainable.
-# Distinguishes "not installed but in the archive" from "apt has never heard of
-# this name", because the second means the package list is wrong for this
-# release and no amount of apt-get will fix it.
-# --check-packages: name every Qt6/KF6 package apt does not recognise, and
-# nothing else. Silence means the whole list is good on this release.
+# Every apt package this run needs, one per line, in install order.
 #
-# Separate from check_kstars_build_dependencies() on purpose. That one is a
-# preflight gate: it runs inside an install, stops it, and explains at length.
-# This one answers a single question, prints one name per line, and is meant to
-# be pasted into a terminal on the Pi and the output pasted back. Both read the
-# same two arrays, so neither can drift from what the install would use.
+# This is the single source of truth. check_apt_packages() verifies what it
+# emits, install_apt_packages() installs what it emits, and
+# report_unknown_packages() reports on what it emits — none of the three names
+# an array itself. A package that is checked but not installed, or installed but
+# never checked, is not expressible.
+#
+# It depends on SKIP_KSTARS, so it must not be called before the options are
+# parsed.
+required_packages() {
+    local -a wanted=(
+        "${CORE_BUILD_PACKAGES[@]}"
+        "${SOLVER_BUILD_PACKAGES[@]}"
+        "${QT6_BUILD_PACKAGES[@]}"
+    )
+    if [[ ${SKIP_KSTARS} -eq 0 ]]; then
+        wanted+=("${KSTARS_EXTRA_PACKAGES[@]}" "${KF6_BUILD_PACKAGES[@]}")
+    fi
+    # Collected into an array and printed once, rather than printed per group:
+    # `printf '%s\n'` with no arguments emits a blank line, so an emptied group
+    # would turn into an empty package name and the callers' emptiness check
+    # would never fire.
+    (( ${#wanted[@]} > 0 )) && printf '%s\n' "${wanted[@]}"
+    return 0
+}
+
+# --check-packages: name every package apt does not recognise, and nothing else.
+# Silence means the whole list is good on this release.
+#
+# Separate from check_apt_packages() on purpose. That one is a preflight gate: it
+# runs inside an install, stops it, and explains at length. This one answers a
+# single question, prints one name per line, and is meant to be pasted into a
+# terminal on the Pi and the output pasted back.
 report_unknown_packages() {
-    local wanted=("${QT6_BUILD_PACKAGES[@]}" "${KF6_BUILD_PACKAGES[@]}")
+    local wanted=()
+    mapfile -t wanted < <(required_packages)
+    refuse_empty_package_list "${#wanted[@]}"
 
     # One apt-cache call, not one per package: `apt-cache policy` silently omits
     # names it does not know, so what comes back is the set that exists and the
@@ -565,15 +692,28 @@ report_unknown_packages() {
     return 1
 }
 
-check_kstars_build_dependencies() {
-    if [[ ${SKIP_KSTARS} -eq 1 ]]; then
-        info "KStars skipped; not checking Qt6/KF6"
-        return 0
-    fi
+# An empty list would make --check-packages print nothing, which is exactly what
+# "everything is fine" looks like, and would make the install stage a no-op that
+# reports success. Both failures read as confirmation, so neither is allowed to
+# happen quietly.
+refuse_empty_package_list() {
+    (( $1 > 0 )) || fail "required_packages() produced nothing.
+    That cannot be right: this installer always needs a compiler. Something has
+    emptied the package arrays at the top of this script. Nothing has been done."
+}
 
-    step "Checking the Qt6 and KF6 packages KStars 3.8.x needs"
+# Refuse before building anything if a dependency is not obtainable.
+# Distinguishes "not installed but in the archive" from "apt has never heard of
+# this name", because the second means the package list is wrong for this
+# release and no amount of apt-get will fix it.
+check_apt_packages() {
+    step "Checking the apt packages this build needs"
+    local wanted=()
+    mapfile -t wanted < <(required_packages)
+    refuse_empty_package_list "${#wanted[@]}"
+
     local installable=() unknown=() package
-    for package in "${QT6_BUILD_PACKAGES[@]}" "${KF6_BUILD_PACKAGES[@]}"; do
+    for package in "${wanted[@]}"; do
         if dpkg-query -W -f='${Status}' "${package}" 2>/dev/null | grep -q "ok installed"; then
             continue
         fi
@@ -589,38 +729,31 @@ check_kstars_build_dependencies() {
         ${unknown[*]}
 
     That means either the OS is not what this installer expects, or the package
-    names in QT6_BUILD_PACKAGES / KF6_BUILD_PACKAGES at the top of this script
-    are wrong for your Raspberry Pi OS version. Check with:
+    names in the *_BUILD_PACKAGES arrays at the top of this script are wrong for
+    your Raspberry Pi OS version. Check with:
         apt-cache search --names-only '^libkf6.*-dev$'
     and correct the list. Nothing has been built."
     fi
 
+    info "${#wanted[@]} package(s) needed"
     if (( ${#installable[@]} > 0 )); then
-        info "${#installable[@]} package(s) still to install; they are in the archive"
+        info "${#installable[@]} still to install; they are in the archive"
     fi
-    ok "every Qt6/KF6 build dependency is installed or available"
+    ok "every build dependency is installed or available"
 }
 
-install_build_dependencies() {
+# One stage, before any compiler runs, installing everything check_apt_packages()
+# just verified. Not per-component and not lazily: a dependency installed by the
+# stage that needs it is a dependency the *previous* stage discovers it needed.
+install_apt_packages() {
     step "Installing build dependencies"
-    as_root apt-get update -qq
-    as_root apt-get install -y --no-install-recommends \
-        build-essential cmake git pkg-config \
-        libnova-dev libcfitsio-dev libusb-1.0-0-dev zlib1g-dev libgsl-dev \
-        libjpeg-dev libcurl4-gnutls-dev libtheora-dev libfftw3-dev \
-        libev-dev libavcodec-dev libavdevice-dev libraw-dev libgphoto2-dev \
-        libftdi1-dev libdc1394-dev libgps-dev librtlsdr-dev \
-        python3-venv python3-dev \
-        siril
-    ok "apt dependencies installed"
-}
+    local wanted=()
+    mapfile -t wanted < <(required_packages)
+    refuse_empty_package_list "${#wanted[@]}"
 
-install_kstars_dependencies() {
-    step "Installing KStars build dependencies"
-    as_root apt-get install -y --no-install-recommends \
-        "${QT6_BUILD_PACKAGES[@]}" "${KF6_BUILD_PACKAGES[@]}" \
-        libeigen3-dev wcslib-dev
-    ok "Qt6 and KF6 build dependencies installed"
+    as_root apt-get update -qq
+    as_root apt-get install -y --no-install-recommends "${wanted[@]}"
+    ok "${#wanted[@]} apt package(s) installed"
 }
 
 build_indi() {
@@ -727,11 +860,37 @@ build_kstars() {
     40-character commit SHA. KStars has no usable tags, so a commit is the only
     thing that pins it. Nothing has been built."
     fi
-    install_kstars_dependencies
+    require_space_for_kstars
     fetch_source "${KSTARS_REPO}" "${KSTARS_REF}" "${BUILD_DIR}/kstars" "${KSTARS_BRANCH}"
-    cmake_build_install "${BUILD_DIR}/kstars" "kstars-build" -DBUILD_TESTING=OFF
+    require_qt6_option "${BUILD_DIR}/kstars"
+    # -DBUILD_WITH_QT6=ON is not optional and not a preference. KStars 3.8.3
+    # defaults it OFF, and without it the configure step looks for Qt5 5.12.7 —
+    # which Trixie does not ship at all. On the platform this project chose for
+    # its Qt6/KF6 packages, omitting this flag makes the build impossible.
+    # See docs/decisions/0008-raspberry-pi-os-trixie.md.
+    cmake_build_install "${BUILD_DIR}/kstars" "kstars-build" \
+        -DBUILD_WITH_QT6=ON -DBUILD_TESTING=OFF
     command -v kstars >/dev/null 2>&1 || fail "KStars did not install"
-    ok "KStars installed"
+    ok "KStars installed ($(kstars --version 2>&1 | head -n1))"
+}
+
+# CMake ignores a -D for a variable no CMakeLists declares, with a note at the
+# end of a configure log nobody reads. So if BUILD_WITH_QT6 is ever renamed
+# upstream, passing it would silently do nothing and the build would fall back
+# to hunting for Qt5 — the exact failure the flag exists to prevent, wearing the
+# disguise of a flag that was set. Check that the option is really there.
+require_qt6_option() {
+    local file="$1/CMakeLists.txt"
+    [[ -f ${file} ]] || fail "${file} does not exist. This is not a KStars source tree."
+    grep -q -E '^[[:space:]]*option\([[:space:]]*BUILD_WITH_QT6' "${file}" || fail \
+        "KStars' CMakeLists.txt does not declare the BUILD_WITH_QT6 option:
+        ${file}
+    In 3.8.3 it is line 17, and it defaults to OFF. If it has been renamed or
+    removed upstream, passing -DBUILD_WITH_QT6=ON would be silently ignored and
+    the build would look for Qt5 instead — which Trixie does not ship. Find what
+    replaced it:
+        grep -n -i 'qt6' '${file}' | head
+    and update build_kstars() before building. Nothing has been built."
 }
 
 download_indices() {
@@ -932,7 +1091,9 @@ main() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --check)        CHECK_ONLY=1 ;;
-            --check-packages) report_unknown_packages; exit $? ;;
+            # Deferred until the loop ends: what is checked depends on
+            # --skip-kstars, which may come after it on the command line.
+            --check-packages) CHECK_PACKAGES=1 ;;
             --allow-unpinned) ALLOW_UNPINNED=1 ;;
             --build-dir)    BUILD_DIR="$2"; VERSIONS_LOCK="${BUILD_DIR}/versions.lock"; shift ;;
             --index-dir)    INDEX_DIR="$2"; shift ;;
@@ -945,6 +1106,11 @@ main() {
         esac
         shift
     done
+
+    if [[ ${CHECK_PACKAGES} -eq 1 ]]; then
+        report_unknown_packages
+        exit $?
+    fi
 
     if [[ ${CHECK_ONLY} -eq 1 ]]; then
         verify || exit 1
@@ -959,7 +1125,7 @@ main() {
     confirm "Continue?" || fail "cancelled"
 
     mkdir -p "${BUILD_DIR}"
-    install_build_dependencies
+    install_apt_packages
     build_indi
     build_indi_3rdparty
     build_stellarsolver
