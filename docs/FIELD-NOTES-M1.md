@@ -292,3 +292,142 @@ Suggested, not prescriptive — decide and record as ADRs:
 7. **Test fixtures**: commit `wave150i-properties.txt` as the reference property set for
    `indi_eqmod` with this mount. Note that it is real hardware output, unlike
    `fake_kstars.py`, which shares an author with the bridge it tests.
+
+---
+---
+
+# Field Notes — M1, part two: the four remaining devices
+
+**Recorded 2026-08-07, on the reference rig.** Same standing as part one: evidence,
+not instruction. Where it contradicts SPEC.md or a config file, the contradiction is
+the point.
+
+Property dumps: `backend/tests/fixtures/hardware/devices-properties.txt` and
+`devices-properties-final.txt` (the wheel again, after its positions were cycled).
+
+---
+
+## 9. HEADLINE: M1 hardware is complete
+
+**All five devices pass.** Only the KStars build remains outstanding in M1.
+
+The INDI device names, exactly as the drivers announce them — these are the
+`indi_device_name` values:
+
+| Device | `indi_device_name` | Driver | Version |
+|---|---|---|---|
+| Imaging camera | `ZWO CCD ASI533MM Pro` | `indi_asi_ccd` | 2.7 |
+| Guide camera | `ZWO CCD ASI120MM Mini` | `indi_asi_ccd` | 2.7 |
+| Filter wheel | `ZWO EFW` | `indi_asi_wheel` | 2.7 |
+| Focuser | `ZWO EAF` | `indi_asi_focuser` | 1.2 |
+| Mount | `EQMod Mount` | `indi_eqmod_telescope` | 1.4 |
+
+All four ZWO devices connected first time over standard USB. Nothing of the
+CDC-ACM kind (part one, §2.1) — that was the mount's peculiarity alone.
+
+Verified against hardware: the 533MM reports 3008x3008 at 3.76 µm; the 120MM Mini
+1280x960 at 3.75 µm; the EAF absolute position 828 and 18.44 °C; the EFW cycles
+positions and returns.
+
+**Cooling verified.** 16.1 °C to 14.6 °C in 60 seconds, TEC at 20 %, target 5 °C.
+The ramp is proportional and slows near setpoint, which is expected behaviour.
+SPEC §14's M1 criterion "ASI533MM cools and captures" is met.
+
+---
+
+## 10. The filter wheel is wrong in two separate ways
+
+### 10.1 `equipment.yaml` has the wrong slot order
+
+Verified physically, by opening the wheel and reading the filter markings:
+
+| Slot | Actually fitted | SPEC §5.1 said |
+|---|---|---|
+| 1 | **L** | Dark |
+| 2 | **R** | L |
+| 3 | **G** | R |
+| 4 | **B** | G |
+| 5 | **Dark** | B |
+| 6–8 | empty | empty |
+
+**Every slot was wrong.** This is not an off-by-one to patch; it is a different
+mapping. `equipment.yaml` and SPEC §5.1 both need correcting.
+
+### 10.2 The driver's stored names are ZWO factory defaults
+
+```
+FILTER_NAME.FILTER_SLOT_NAME_1 = Red
+FILTER_NAME.FILTER_SLOT_NAME_2 = Green
+FILTER_NAME.FILTER_SLOT_NAME_3 = Blue
+FILTER_NAME.FILTER_SLOT_NAME_4 = H_Alpha
+FILTER_NAME.FILTER_SLOT_NAME_5 = SII
+FILTER_NAME.FILTER_SLOT_NAME_6 = OIII
+FILTER_NAME.FILTER_SLOT_NAME_7 = LPR
+FILTER_NAME.FILTER_SLOT_NAME_8 = Luminance
+```
+
+These bear no relation to what is in the wheel, and **that is dangerous quietly**.
+Anything reading `FILTER_NAME` from the driver would believe slot 4 is H-Alpha when
+it is B, and would file flats and darks against the wrong channel. Nothing in the
+resulting image would look wrong.
+
+**Requirement.** Nocturne *writes* filter names to the driver from `equipment.yaml`
+on connect. It never reads them as a source of truth. If the driver's names differ
+at connect, that is not a discrepancy to reconcile — configuration wins, overwrite.
+Log the overwrite, so a wheel that has been physically rearranged leaves a trace.
+
+No code path may read `FILTER_NAME` into a decision.
+
+---
+
+## 11. The slew-rate pattern is general, not the mount's
+
+The mount starts at 800× on every connection (part one, §3.2). The cameras do the
+same thing with different values:
+
+```
+ZWO CCD ASI533MM Pro.CCD_CONTROLS.Gain   = 200      (equipment.yaml gain profile: 100)
+ZWO CCD ASI533MM Pro.CCD_CONTROLS.Offset = 1
+ZWO CCD ASI120MM Mini.CCD_CONTROLS.Gain  = 50
+ZWO CCD ASI120MM Mini.CCD_CONTROLS.Offset = 0
+```
+
+**Driver defaults are not our configuration, on any device.** What `MountLink` does
+for the slew ceiling has to become one mechanism covering all five devices: apply
+the configured values on connect, re-apply on every disconnected-to-connected
+transition, with the same test discipline.
+
+The mount must not be special-cased. If this exists once and covers everything, a
+new device gets the protection by construction.
+
+---
+
+## 12. Four smaller corrections
+
+**`FOCUS_MAX.FOCUS_MAX_VALUE` reads 100000**; `equipment.yaml` says 60000. The
+driver value is authoritative — it comes from the hardware.
+
+**`FOCUS_BACKLASH_STEPS` reads 180**, with `FOCUS_BACKLASH_TOGGLE` disabled. SPEC
+has `backlash_steps: 0`, "measured in M2". 180 is a ZWO default, not a measurement,
+and 0 is worse than reading the driver. The M2 backlash procedure must note that a
+default is already present and has to be distinguished from a measured value.
+
+**`CCD_INFO.CCD_BITSPERPIXEL` reads 16 on both cameras.** That is the *container*,
+not the converter: the IMX533's ADC is 14-bit and SPEC §2.1 is correct as written.
+Recorded here so that nobody later "corrects" the SPEC to match the driver.
+
+**The EFW exposes `FILTER_CALIBRATION.CALIBRATE` and
+`FILTER_UNIDIRECTIONAL_MOTION`** (currently disabled). Neither is needed now.
+Unidirectional motion may matter for repeatability if filter positioning proves
+inconsistent — noted, not enabled.
+
+---
+
+## 13. What remains
+
+The KStars build. That is the whole of M1's outstanding work.
+
+Once it builds, [issue #2](https://github.com/alexcatesp/nocturne/issues/2) opens:
+introspect the live DBus interface, replace every guessed method name, add the
+Optical Trains interface from 3.8.2, and rebuild `fake_kstars.py` from captured
+introspection XML rather than from assumptions.
