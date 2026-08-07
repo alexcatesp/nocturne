@@ -289,12 +289,14 @@ class TestWhenTheCeilingCannotBeApplied:
                 values={RA_SLEW_ELEMENT: 800.0},
             )
             caplog.clear()
-            with caplog.at_level("ERROR", logger="nocturne.executor.mount"):
+            # The watcher and its logging now live in nocturne.executor.link:
+            # the mount is not special-cased any more (FIELD-NOTES-M1 section 11).
+            with caplog.at_level("ERROR", logger="nocturne.executor.link"):
                 await server.kill_driver(EQMOD_DEVICE)
                 await server.restart_driver(EQMOD_DEVICE, broken)
-                await _until(lambda: "800x sidereal" in caplog.text)
+                await _until(lambda: "could not re-apply" in caplog.text)
 
-        assert "may be at its default" in caplog.text
+        assert "driver's defaults" in caplog.text
 
     async def test_the_conversion_failure_happens_before_anything_connects(
         self, executor: Executor, server: FakeIndiServer

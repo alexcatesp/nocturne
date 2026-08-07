@@ -82,11 +82,11 @@ def load_recorded_properties(path: Path = PROPERTY_DUMP) -> dict[str, FakeProper
     properties: dict[str, FakeProperty] = {}
     for vector in order:
         elements = collected[vector]
-        kind = _KNOWN_KINDS.get(vector) or _infer_kind(elements.values())
+        kind = _KNOWN_KINDS.get(vector) or infer_kind(elements.values())
         properties[vector] = FakeProperty(
             name=vector,
             kind=kind,
-            values={name: _coerce(kind, value) for name, value in elements.items()},
+            values={name: coerce_value(kind, value) for name, value in elements.items()},
             # indi_getprop records neither the rule nor the permission. AnyOfMany
             # is the permissive choice: it lets a test write one element without
             # the fixture pretending to know the others were cleared.
@@ -95,7 +95,8 @@ def load_recorded_properties(path: Path = PROPERTY_DUMP) -> dict[str, FakeProper
     return properties
 
 
-def _infer_kind(values: Iterable[str]) -> PropertyKind:
+def infer_kind(values: Iterable[str]) -> PropertyKind:
+    """Guess a vector's kind from its values. Shared with devices.py."""
     listed = list(values)
     if listed and all(value in _SWITCH_VALUES for value in listed):
         return PropertyKind.SWITCH
@@ -112,7 +113,8 @@ def _looks_numeric(value: str) -> bool:
     return True
 
 
-def _coerce(kind: PropertyKind, value: str) -> float | str | bool:
+def coerce_value(kind: PropertyKind, value: str) -> float | str | bool:
+    """Turn a recorded string into the value its kind implies."""
     if kind is PropertyKind.SWITCH:
         return value == "On"
     if kind is PropertyKind.NUMBER:
