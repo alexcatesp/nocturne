@@ -35,11 +35,14 @@ from nocturne.executor import ekos
 from tests.fixtures import fake_kstars
 from tests.fixtures.ekos_interfaces import (
     EKOS_OPTICAL_TRAIN,
+    EKOS_OPTICAL_TRAIN_PATH,
     STANDARD_INTERFACES,
     Interface,
     declared_interfaces,
     exported_child_nodes,
     exported_objects,
+    running_child_nodes,
+    running_objects,
 )
 
 #: dbus-next turns a Python annotation into a DBus type by taking it literally,
@@ -254,31 +257,142 @@ class TestTheStubMatchesTheRecordedSignatures:
         assert inspect.get_annotations(fake_kstars.FakeIndiInterface.connect)["host"] == "s"
 
 
-class TestWhatIsNotYetRecorded:
-    """Honest about the edges of the capture, so nobody reads more into it."""
+class TestTheModulesAppearOnlyOnceEkosIsStarted:
+    """Two captures of the same process, twenty minutes and one call apart.
 
-    #: Created when Ekos is *started*, so absent from a capture taken at rest.
+    Before ``Ekos.start`` KStars exports five paths; after it, twenty-four. That
+    is not a quirk to note in passing — it is why a single introspection can
+    never establish that a module interface is absent, and why the bridge's
+    containment check has to run after Ekos is up rather than at attach time.
+    """
+
+    #: Created when Ekos is started. Confirmed absent at rest, present running.
     MODULE_NODES: Final = ("Capture", "Focus", "Guide", "Align", "Mount")
 
-    def test_the_ekos_module_objects_were_not_exported_at_rest(self) -> None:
+    def test_they_were_absent_at_rest(self) -> None:
         children = exported_child_nodes()[ekos.EKOS_PATH]
         assert children == {"Scheduler"}, children
         for node in self.MODULE_NODES:
             assert node not in children
 
-    def test_but_their_interfaces_are_declared_by_the_build(self) -> None:
-        """So they are not unknowns — they are unstarted."""
-        declared = set(declared_interfaces())
-        for node in self.MODULE_NODES:
-            assert f"org.kde.kstars.Ekos.{node}" in declared
+    def test_they_are_present_once_ekos_is_running(self) -> None:
+        children = running_child_nodes()[ekos.EKOS_PATH]
+        assert set(self.MODULE_NODES) <= children, sorted(children)
+        assert "OpticalTrain" in children
 
-    def test_the_optical_train_interface_is_present_in_the_built_tree(self) -> None:
-        """The interface ADR 0006 and ADR 0008 cite as the reason for requiring
-        KStars >= 3.8.2. Confirmed in the tree that was built, rather than taken
-        from release notes."""
+    def test_the_running_capture_is_the_larger_of_the_two(self) -> None:
+        """Assert the two captures are different documents, not the same file
+        read twice — which is what a copy-paste slip in the fixture would be."""
+        assert len(running_objects()) == 24
+        assert len(exported_objects()) == 5
+
+    @pytest.mark.parametrize("node", MODULE_NODES)
+    def test_each_module_exports_the_interface_it_declares(self, node: str) -> None:
+        name = f"org.kde.kstars.Ekos.{node}"
+        exported = running_objects()[f"{ekos.EKOS_PATH}/{node}"]
+        assert name in exported, sorted(set(exported) - STANDARD_INTERFACES)
+        assert exported[name].method_names() == declared_interfaces()[name].method_names()
+
+
+class TestTheDeclaredInterfacesAreTheExportedOnes:
+    """The source tree can be trusted as the contract — measured, not assumed.
+
+    Every KStars interface in the running capture matches its adaptor definition
+    method-for-method. That is what makes the declared XML usable for planning
+    M2 work without starting KStars each time.
+    """
+
+    def exported_pairs(self) -> list[tuple[str, str, Interface]]:
+        """``(path, interface name, interface)`` for KStars' own interfaces."""
+        return [
+            (path, name, interface)
+            for path, interfaces in running_objects().items()
+            for name, interface in interfaces.items()
+            if name.startswith("org.kde.kstars")
+        ]
+
+    def test_the_scan_found_the_interfaces_it_is_about_to_check(self) -> None:
+        """Passing over an empty list is what a broken scan looks like."""
+        names = {name for _, name, _ in self.exported_pairs()}
+        assert len(names) >= 10, sorted(names)
+        assert EKOS_OPTICAL_TRAIN in names
+
+    def test_every_exported_interface_is_one_the_build_declares(self) -> None:
+        declared = declared_interfaces()
+        undeclared = sorted({name for _, name, _ in self.exported_pairs()} - set(declared))
+        assert undeclared == []
+
+    def test_every_exported_interface_matches_its_declaration(self) -> None:
+        declared = declared_interfaces()
+        differences = [
+            (path, name)
+            for path, name, interface in self.exported_pairs()
+            if interface.method_names() != declared[name].method_names()
+        ]
+        assert differences == []
+
+    def test_a_disagreement_would_be_detected(self) -> None:
+        """The positive control for both checks above."""
+        declared = declared_interfaces()
+        interface = running_objects()[ekos.EKOS_PATH][ekos.EKOS_INTERFACE]
+        assert interface.method_names() == declared[ekos.EKOS_INTERFACE].method_names()
+
+        tampered = Interface(name=ekos.EKOS_INTERFACE, methods=dict(interface.methods))
+        tampered.methods.pop("start")
+        assert tampered.method_names() != declared[ekos.EKOS_INTERFACE].method_names()
+
+    def test_some_declared_interfaces_are_never_exported(self) -> None:
+        """Not a discrepancy — device-type interfaces for hardware the profile
+        does not have. Recorded so their absence is not read as a problem."""
+        exported = {name for _, name, _ in self.exported_pairs()}
+        never = sorted(set(declared_interfaces()) - exported)
+        assert never == [
+            "org.kde.kstars.Ekos.Observatory",
+            "org.kde.kstars.INDI.Dome",
+            "org.kde.kstars.INDI.DustCap",
+            "org.kde.kstars.INDI.LightBox",
+            "org.kde.kstars.INDI.PAC",
+            "org.kde.kstars.INDI.Weather",
+        ]
+
+
+class TestTheOpticalTrain:
+    """The interface the Trixie decision was justified by, now exported."""
+
+    def test_it_is_declared_by_the_built_tree(self) -> None:
         assert EKOS_OPTICAL_TRAIN in declared_interfaces()
 
-    def test_the_bridge_does_not_touch_the_optical_train_yet(self) -> None:
+    def test_it_is_exported_at_an_indexed_path(self) -> None:
+        """ADR 0006 and ADR 0008 required KStars >= 3.8.2 for this. It is here,
+        on the machine, rather than in release notes."""
+        exported = running_objects()[EKOS_OPTICAL_TRAIN_PATH]
+        assert EKOS_OPTICAL_TRAIN in exported
+        assert "setCamera" in exported[EKOS_OPTICAL_TRAIN].methods
+
+    def test_the_parent_path_is_a_bare_container(self) -> None:
+        """``/KStars/Ekos/OpticalTrain`` carries no KStars interface at all.
+
+        A train is addressed by id. Anything that ever calls this interface has
+        to enumerate the children rather than assume the parent answers, and
+        assuming otherwise is the kind of thing that reads as KStars being
+        broken.
+        """
+        parent = running_objects()[f"{ekos.EKOS_PATH}/OpticalTrain"]
+        assert {name for name in parent if name.startswith("org.kde")} == set()
+        assert running_child_nodes()[f"{ekos.EKOS_PATH}/OpticalTrain"] == {"1"}
+
+    def test_the_bridge_does_not_touch_it(self) -> None:
         """Using it is M2. Recording that it exists is M1."""
         source = inspect.getsource(ekos)
         assert "OpticalTrain" not in source.replace(EKOS_OPTICAL_TRAIN, "")
+
+    def test_the_bridge_names_no_module_interface_at_all(self) -> None:
+        """The M2 boundary, asserted rather than intended."""
+        source = inspect.getsource(ekos)
+        for node in ("Capture", "Focus", "Guide", "Align", "Mount", "Scheduler"):
+            assert f"org.kde.kstars.Ekos.{node}" not in source
+
+    def test_that_boundary_check_can_fail(self) -> None:
+        """The positive control: the same detector, over a source that does."""
+        offender = 'INTERFACE = "org.kde.kstars.Ekos.Capture"'
+        assert any(f"org.kde.kstars.Ekos.{node}" in offender for node in ("Capture", "Focus"))

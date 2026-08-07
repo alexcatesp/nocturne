@@ -9,13 +9,18 @@ KStars 3.8.3 (commit ``61d849b0``) — see ``docs/ekos-dbus-capture.md``:
 
 ``hardware/kstars-live-at-rest.xml``
     ``gdbus introspect`` against the running process, before Ekos is started.
-    What KStars **exports** at that moment.
+    What KStars **exports** at that moment: five paths.
 
-The distinction is not pedantry. A method in the first and not the second is an
-object that has not been created yet — ``/KStars/Ekos/Capture`` does not exist
-until Ekos starts. A method in *neither* is a guess, and every guess in
-``nocturne/executor/ekos.py`` was one until these files existed
-(https://github.com/alexcatesp/nocturne/issues/2).
+``hardware/kstars-ekos-running.xml``
+    The same, after ``Ekos.start`` on the Simulators profile. Twenty-four paths,
+    including the module objects and the optical train.
+
+The distinction between declared and exported is not pedantry. A method in the
+first and not the second is an object that has not been created yet —
+``/KStars/Ekos/Capture`` does not exist until Ekos starts, which is exactly what
+the third file demonstrates by containing it. A method in *neither* is a guess,
+and every guess in ``nocturne/executor/ekos.py`` was one until these files
+existed (https://github.com/alexcatesp/nocturne/issues/2).
 
 This module exists so that tests can assert against what the machine said rather
 than against ``fake_kstars.py``, which is a stub written by the author of the
@@ -34,6 +39,7 @@ from typing import Final
 HARDWARE = Path(__file__).parent / "hardware"
 DECLARED_DUMP: Final = HARDWARE / "kstars-dbus-interfaces.xml"
 EXPORTED_DUMP: Final = HARDWARE / "kstars-live-at-rest.xml"
+RUNNING_DUMP: Final = HARDWARE / "kstars-ekos-running.xml"
 
 #: Sections are introduced by a line the capture script printed. One source file
 #: ended without a newline, so the marker can begin mid-line; matching on the
@@ -165,42 +171,79 @@ def declared_interfaces() -> dict[str, Interface]:
     return interfaces
 
 
-def exported_objects() -> dict[str, dict[str, Interface]]:
-    """``{object path: {interface: Interface}}``, as the running KStars answered.
+def _objects(dump: Path, landmarks: tuple[str, ...]) -> dict[str, dict[str, Interface]]:
+    """``{object path: {interface: Interface}}`` from an introspection capture.
 
     Raises:
         AssertionError: if the parse yields nothing or loses a path that is in
-            the capture.
+            the capture. Every test built on these reads a path or a signature
+            out of them; one that quietly returned nothing would make a whole
+            class of them pass while checking nothing (CLAUDE.md section 2).
     """
-    sections = _split_sections(EXPORTED_DUMP.read_text(encoding="utf-8"))
-    assert sections, f"no object paths parsed from {EXPORTED_DUMP}"
-
+    sections = _split_sections(dump.read_text(encoding="utf-8"))
+    assert sections, f"no object paths parsed from {dump}"
     objects = {path: _parse_node(xml) for path, xml in sections.items()}
-    for landmark in ("/KStars", "/KStars/Ekos", "/KStars/INDI"):
-        assert landmark in objects, f"{landmark} is missing from {EXPORTED_DUMP}"
+    for landmark in landmarks:
+        assert landmark in objects, f"{landmark} is missing from {dump}"
     return objects
 
 
-def exported_child_nodes() -> dict[str, set[str]]:
-    """``{object path: child node names}`` from the same capture."""
-    sections = _split_sections(EXPORTED_DUMP.read_text(encoding="utf-8"))
-    assert sections, f"no object paths parsed from {EXPORTED_DUMP}"
+def exported_objects() -> dict[str, dict[str, Interface]]:
+    """What KStars exported **before** Ekos was started: five paths."""
+    return _objects(EXPORTED_DUMP, ("/KStars", "/KStars/Ekos", "/KStars/INDI"))
+
+
+def running_objects() -> dict[str, dict[str, Interface]]:
+    """What KStars exported **after** ``Ekos.start``: twenty-four paths.
+
+    The module objects and the optical train are here and nowhere else, because
+    Ekos creates them when it starts.
+    """
+    return _objects(
+        RUNNING_DUMP,
+        ("/KStars/Ekos/Capture", "/KStars/Ekos/Mount", EKOS_OPTICAL_TRAIN_PATH),
+    )
+
+
+def _child_node_map(dump: Path) -> dict[str, set[str]]:
+    sections = _split_sections(dump.read_text(encoding="utf-8"))
+    assert sections, f"no object paths parsed from {dump}"
     return {path: _child_nodes(xml) for path, xml in sections.items()}
 
 
+def exported_child_nodes() -> dict[str, set[str]]:
+    """``{object path: child node names}``, before Ekos was started."""
+    return _child_node_map(EXPORTED_DUMP)
+
+
+def running_child_nodes() -> dict[str, set[str]]:
+    """``{object path: child node names}``, after Ekos was started."""
+    return _child_node_map(RUNNING_DUMP)
+
+
 #: The interface ADR 0006 and ADR 0008 both cite as the reason for requiring
-#: KStars >= 3.8.2. Declared in the built tree; its objects do not exist until
-#: Ekos has been started, so nothing here asserts it is exported.
+#: KStars >= 3.8.2. Declared in the built tree and, since the running capture,
+#: confirmed exported.
 EKOS_OPTICAL_TRAIN: Final = "org.kde.kstars.Ekos.OpticalTrain"
+
+#: Where it is exported. ``/KStars/Ekos/OpticalTrain`` itself is a bare
+#: container node carrying no KStars interface at all — the trains are its
+#: numbered children, so an optical train is addressed by id and never by that
+#: parent path.
+EKOS_OPTICAL_TRAIN_PATH: Final = "/KStars/Ekos/OpticalTrain/1"
 
 __all__ = [
     "DECLARED_DUMP",
     "EKOS_OPTICAL_TRAIN",
+    "EKOS_OPTICAL_TRAIN_PATH",
     "EXPORTED_DUMP",
+    "RUNNING_DUMP",
     "STANDARD_INTERFACES",
     "Interface",
     "Method",
     "declared_interfaces",
     "exported_child_nodes",
     "exported_objects",
+    "running_child_nodes",
+    "running_objects",
 ]

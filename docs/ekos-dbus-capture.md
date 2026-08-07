@@ -216,6 +216,10 @@ and send me whichever of them produced something.
 
 ## 4. Start Ekos, then capture again
 
+*Performed on the reference rig, 2026-08-07, on the `Simulators` profile with the mount
+powered down. Result: twenty-four object paths against five at rest. Fixture:
+`backend/tests/fixtures/hardware/kstars-ekos-running.xml`.*
+
 Ekos creates its per-module DBus objects — capture, focus, guide, align, mount, scheduler
 and the optical trains — **when Ekos is started**, not when KStars is. So the file from
 step 3b does not contain them, and the second capture is the one that has them.
@@ -272,10 +276,17 @@ done < ekos-paths.txt > kstars-ekos-running.xml
 grep -c '<method name=' kstars-ekos-running.xml
 ```
 
-**Expected:** paths under `/KStars/Ekos/` that were absent at rest — `Capture`, `Focus`,
-`Guide`, `Align`, `Mount`. An **optical train** object appearing there is the thing ADR
-0008 justified the whole Trixie decision for; its interface is declared in the built tree
-already, and this would be it exported.
+**Expected**, and observed: paths under `/KStars/Ekos/` that were absent at rest —
+`Align`, `Capture`, `Focus`, `Guide`, `Mount` — plus `OpticalTrain/1`, `INDI/GenericDevice/1..3`
+and `FOV/1..7`.
+
+Two things the first run of this step established, both of which would otherwise have been
+guesses later:
+
+- **`/KStars/Ekos/OpticalTrain` is a bare container.** No KStars interface on it at all;
+  the trains are its numbered children. A train is addressed by id.
+- **Declared matches exported, method-for-method, on every interface.** So the nineteen
+  XML files in the source tree can be read as the contract without starting KStars again.
 
 ---
 

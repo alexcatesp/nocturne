@@ -752,13 +752,69 @@ without asking, in a document about not doing that.
 
 ---
 
-## 25. What is still not recorded
+## 25. Ekos started, and the modules are recorded too
 
-The Ekos module objects have never been introspected live, because Ekos was not
-started during this capture. Their interfaces are declared, so they are unstarted
-rather than unknown — but the distinction matters the moment M2 calls one.
+Step 4 was performed the same evening, on the `Simulators` profile with the mount
+powered down. Fixture: `kstars-ekos-running.xml`.
 
-Step 4 of `docs/ekos-dbus-capture.md` now carries verified commands for that
-(`getProfiles`, `setProfile`, `start`, then per-path introspection). It is not needed
-to close issue #2: nothing in `ekos.py` references those modules, and adding
-references is M2.
+**Five object paths at rest; twenty-four with Ekos running.** The nineteen that
+appear are the whole reason the capture has two passes:
+
+```
+/KStars/Ekos/Align            /KStars/Ekos/OpticalTrain      (container)
+/KStars/Ekos/Capture          /KStars/Ekos/OpticalTrain/1    <- the train
+/KStars/Ekos/Focus            /KStars/INDI/GenericDevice     (container)
+/KStars/Ekos/Guide            /KStars/INDI/GenericDevice/1..3
+/KStars/Ekos/Mount            /KStars/FOV/1..7
+```
+
+### 25.1 The declared XML is the contract — measured, not assumed
+
+**Every KStars interface in the running capture matches its adaptor definition
+method-for-method.** Not one discrepancy across thirteen interfaces.
+
+That is worth more than it looks. It means the nineteen XML files in the source
+tree can be read as the interface when planning M2, without starting KStars and
+introspecting again each time. It was an open question until this capture: the
+declared and exported forms *could* have diverged, and nothing but a comparison
+would have said.
+
+Six declared interfaces are never exported — `Ekos.Observatory` and the five
+device-type ones under `INDI` (`Dome`, `DustCap`, `LightBox`, `PAC`, `Weather`).
+Those are for hardware the profile does not have. **Recorded so their absence is
+not read as a problem later**, which is a mistake that costs an evening.
+
+### 25.2 The optical train is exported, at an indexed path
+
+`org.kde.kstars.Ekos.OpticalTrain` — the interface ADR 0006 and ADR 0008 both
+cite as the reason for requiring KStars >= 3.8.2 — is live on the machine, with
+`setCamera`, `setMount`, `setFocuser`, `setFilterWheel`, `setScope`, `setGuider`
+and read-only properties for each.
+
+**`/KStars/Ekos/OpticalTrain` itself carries no KStars interface at all.** It is
+a bare container node; the trains are its numbered children, and there is one.
+So a train is addressed by id, and code that assumes the parent path answers
+would fail in a way that reads as KStars being broken rather than as the wrong
+path. There is now a test saying so, before anything is written against it.
+
+### 25.3 What this does and does not license
+
+The module interfaces are recorded. **Nothing calls them.** `executor/ekos.py`
+names no module interface, and a test asserts that — with a positive control,
+because it is an absence.
+
+Recording is M1. Align, focus, guide, capture and flip are M2 and have not
+started.
+
+---
+
+## 26. What is still not recorded
+
+The capture ran against the **Simulators** profile, so the `GenericDevice`
+objects are three simulator devices and not the five real ones. Nothing here
+establishes how the real rig appears through Ekos — that is the first thing M2
+finds out, and it is a different question from what the interface *is*.
+
+`Ekos.start` was called once, on a profile chosen for having no hardware behind
+it. No module was exercised. The XML says what the modules offer; nothing here
+says what any of them does.
