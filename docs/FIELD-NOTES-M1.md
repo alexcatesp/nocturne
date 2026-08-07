@@ -486,6 +486,14 @@ of its own, which is the original bug exactly.
 
 An hour of compilation is a slow way to find a two-second `apt-get`.
 
+**What is not established.** The rig has a complete stack, built by hand through
+the five failures. **The fixed installer has not itself been run end to end on
+it.** Its package logic is tested — the check and the install are executed
+against a stubbed apt and their outputs compared — but a test with a stubbed apt
+is not a machine with a real one, which is the same distinction that produced
+this section in the first place. The next clean install is the thing that would
+prove it, and there is no reason to do one.
+
 ---
 
 ## 15. KStars needs `-DBUILD_WITH_QT6=ON`, and ADR 0008 did not know it
@@ -579,7 +587,8 @@ of 28.1 GB**, with 39 astrometry index files installed.
 
 A build that runs out of space dies at around 80 %, which is an hour spent to
 arrive at a preventable error, with a large tree left behind. The installer now
-projects the requirement before the KStars stage and refuses rather than starting:
+projects the requirement before the KStars stage and refuses rather than starting.
+What it prints — **written from the code, not captured from a run**:
 
 ```
 info: KStars needs about 10 GB of build artefacts; 13 GB free under ~/.cache/nocturne-build
