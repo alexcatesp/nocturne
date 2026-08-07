@@ -46,14 +46,18 @@ readonly INDI_VERSION="${NOCTURNE_INDI_VERSION:-v2.2.4}"
 readonly INDI_MINIMUM="2.2.3"
 readonly STELLARSOLVER_VERSION="${NOCTURNE_STELLARSOLVER_VERSION:-2.8}"
 
-# KStars is DELIBERATELY UNSET. See docs/decisions/0006-building-from-source.md.
-# invent.kde.org is not reachable from the environment this was written in, and
-# the KDE mirror on GitHub is missing whole release series (no v3.6.x, no
-# v3.7.x), so it cannot be used to confirm a tag. Rather than guess, the build
-# stops and asks. Confirm the tag on a machine that can reach KDE:
-#   git ls-remote --tags https://invent.kde.org/education/kstars.git | grep 3.8
-# then:  export NOCTURNE_KSTARS_VERSION=<tag>
-readonly KSTARS_VERSION="${NOCTURNE_KSTARS_VERSION:-}"
+# KStars does NOT tag its modern releases. The repository's tags stop at
+# v17.08.3, from the KDE Release Service era; 3.x releases are cut from branches
+# named stable-3.x.y, and no v3.8.3 tag exists or ever will.
+#
+# So this is pinned to a COMMIT, which is strictly stronger than a tag: a tag
+# can be moved or deleted upstream, a SHA cannot. The branch name is kept only
+# as a hint for fetching — the SHA is what is verified after checkout.
+#
+# 3.8.3 was released 1 June 2026 (kstars.kde.org). A stable-3.8.4 branch exists
+# but corresponds to no announced release, so it is not used.
+readonly KSTARS_REF="${NOCTURNE_KSTARS_REF:-61d849b04c42217cf2f0ab956153e56a928ae8a8}"
+readonly KSTARS_BRANCH="${NOCTURNE_KSTARS_BRANCH:-stable-3.8.3}"
 
 readonly INDI_REPO="https://github.com/indilib/indi.git"
 readonly INDI_3RDPARTY_REPO="https://github.com/indilib/indi-3rdparty.git"
@@ -149,7 +153,8 @@ Options:
   --help               this text
 
 Environment overrides:
-  NOCTURNE_INDI_VERSION, NOCTURNE_STELLARSOLVER_VERSION, NOCTURNE_KSTARS_VERSION,
+  NOCTURNE_INDI_VERSION, NOCTURNE_STELLARSOLVER_VERSION, NOCTURNE_KSTARS_REF,
+  NOCTURNE_KSTARS_BRANCH,
   NOCTURNE_INDEX_SCALE_MIN, NOCTURNE_INDEX_SCALE_MAX, NOCTURNE_INDEX_BASE_URL,
   NOCTURNE_BUILD_DIR, NOCTURNE_INDEX_DIR
 EOF
@@ -191,17 +196,47 @@ confirm() {
 # Clone or update a repository at a tag, verify the ref does not move, and
 # record the commit that was actually built. See
 # docs/decisions/0006-building-from-source.md.
+# fetch_source <repo> <ref> <dir> [branch_hint]
+#
+# `git clone --depth 1 --branch X` accepts a tag or a branch, never a commit, so
+# a SHA-pinned component cannot be fetched the same way as a tagged one.
+#
+# For a SHA the order is: ask the server for that one commit
+# (`fetch --depth 1 <sha>`, which GitHub and recent GitLab allow), and if it
+# refuses, fall back to fetching the branch it is supposed to be on and checking
+# the commit out of that. The branch hint is only a route to the commit — it is
+# never what gets built, because require_pinned_ref compares HEAD against the
+# SHA either way. A branch that has moved on fails there, loudly, rather than
+# silently building a different commit.
 fetch_source() {
-    local repo="$1" ref="$2" dir="$3"
+    local repo="$1" ref="$2" dir="$3" branch_hint="${4:-}"
     local name
     name="$(basename "${dir}")"
 
     if [[ -d ${dir}/.git ]]; then
         info "updating ${name}"
-        git -C "${dir}" fetch --quiet --tags --depth 1 origin "${ref}"
-        git -C "${dir}" checkout --quiet FETCH_HEAD
+        rm -rf "${dir}"
+    fi
+
+    info "cloning ${name} at ${ref}"
+    if is_full_sha "${ref}"; then
+        git init --quiet "${dir}"
+        git -C "${dir}" remote add origin "${repo}"
+        if git -C "${dir}" fetch --quiet --depth 1 origin "${ref}" 2>/dev/null; then
+            git -C "${dir}" checkout --quiet FETCH_HEAD
+        else
+            [[ -n ${branch_hint} ]] || fail "${name} is pinned to a commit, this server
+    will not serve a single commit, and no branch was given to find it on.
+    Pass the branch as the fourth argument to fetch_source."
+            info "server would not serve the commit directly; fetching ${branch_hint}"
+            git -C "${dir}" fetch --quiet --depth 50 origin "${branch_hint}"
+            git -C "${dir}" checkout --quiet "${ref}" 2>/dev/null || fail \
+                "${ref} is not among the last 50 commits of ${branch_hint}.
+    Either the pin is wrong or the branch has moved a long way. Confirm the
+    commit before changing anything: this installer will not build a different
+    one to get past the error."
+        fi
     else
-        info "cloning ${name} at ${ref}"
         git clone --quiet --depth 1 --branch "${ref}" "${repo}" "${dir}"
     fi
 
@@ -209,22 +244,70 @@ fetch_source() {
     record_built_version "${name}" "${ref}" "$(git -C "${dir}" rev-parse HEAD)"
 }
 
+# A full 40-character commit SHA. Anything shorter is ambiguous, and a branch
+# name is a moving target.
+is_full_sha() {
+    [[ $1 =~ ^[0-9a-f]{40}$ ]]
+}
+
 # A branch name is a moving target: two installs a week apart would build
-# different code, and a bug could appear between two nights with nothing in
-# this repository having changed.
+# different code, and a bug could appear between two nights with nothing in this
+# repository having changed.
+#
+# What counts as pinned is a full commit SHA or a tag — and a SHA is the
+# STRONGER of the two, not a lesser substitute. A tag is a label upstream can
+# move or delete; a SHA is the commit. An earlier version of this guard accepted
+# only tags, which refused the strongest pin there is and forced a workaround for
+# KStars, which tags nothing. See docs/decisions/0006-building-from-source.md.
+#
+# Either way, what is checked is that HEAD is *the commit that was asked for*.
+# The earlier guard asked `git describe --exact-match --tags HEAD`, which only
+# establishes that HEAD sits at SOME tag — so a checkout that landed on a
+# different tag from the requested one passed, and versions.lock then recorded a
+# ref beside a SHA that did not belong to it. indi-3rdparty makes that concrete:
+# v2.2.3 and v2.2.3.1 are the same commit, so "HEAD is tagged" says nothing
+# about which of them you built.
 require_pinned_ref() {
     local name="$1" ref="$2" dir="$3"
-    if git -C "${dir}" describe --exact-match --tags HEAD >/dev/null 2>&1; then
+    local head
+    head="$(git -C "${dir}" rev-parse HEAD)"
+
+    if is_full_sha "${ref}"; then
+        [[ ${head} == "${ref}" ]] && return 0
+        fail "${name} was pinned to commit ${ref}
+    but the checkout is at ${head}.
+    Nothing has been built. This is not a warning to pass: the source tree is
+    not the one this installer was told to build."
+    fi
+
+    # Not a SHA, so it must be a tag, and HEAD must be at THAT tag.
+    local tagged
+    tagged="$(git -C "${dir}" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" || true)"
+    if [[ -z ${tagged} ]]; then
+        # A shallow fetch does not always bring the tag ref with it. Ask the
+        # remote rather than assume; an unreachable remote fails closed below.
+        # `|| true` on the pipeline, not just 2>/dev/null: under `set -o pipefail`
+        # a failed ls-remote — no origin, no network — would abort the installer
+        # with exit 128 and no message at all, instead of reaching the explained
+        # refusal below. Failing closed is right; failing silently is not.
+        tagged="$( { git -C "${dir}" ls-remote origin "refs/tags/${ref}^{}" 2>/dev/null ||
+            true; } | awk 'NR==1 {print $1}')"
+    fi
+    if [[ -n ${tagged} && ${tagged} == "${head}" ]]; then
         return 0
     fi
+
     if [[ ${ALLOW_UNPINNED} -eq 1 ]]; then
-        warn "${name} is at '${ref}', which is not a tag. The build is NOT reproducible."
+        warn "${name} is at '${ref}', which is neither a tag nor a full commit SHA.
+    The build is NOT reproducible."
         return 0
     fi
-    fail "${name} ref '${ref}' is not a tag, so this build would not be reproducible.
+    fail "${name} ref '${ref}' is neither a tag this checkout is sitting on nor a
+    full 40-character commit SHA, so this build would not be reproducible.
     Two installs of the same Nocturne commit could then behave differently, and a
     change upstream could alter the rig between two nights.
-    Set the matching NOCTURNE_*_VERSION variable to a tag, or pass
+    A short SHA is not enough: it is ambiguous, and it is not what gets recorded.
+    Set the matching NOCTURNE_* variable to a tag or a full commit SHA, or pass
     --allow-unpinned if you are deliberately testing an upstream branch."
 }
 
@@ -582,7 +665,7 @@ build_stellarsolver() {
 }
 
 build_kstars() {
-    step "Building KStars ${KSTARS_VERSION:-<unpinned>}"
+    step "Building KStars ${KSTARS_REF:-<unpinned>} (${KSTARS_BRANCH})"
     if [[ ${SKIP_KSTARS} -eq 1 ]]; then
         warn "skipped at your request; Nocturne cannot drive Ekos without it"
         return
@@ -591,21 +674,29 @@ build_kstars() {
         ok "KStars is already installed ($(kstars --version 2>&1 | head -n1))"
         return
     fi
-    if [[ -z ${KSTARS_VERSION} ]]; then
-        fail "no KStars version is pinned, and this installer will not guess one.
+    if [[ -z ${KSTARS_REF} ]]; then
+        fail "no KStars commit is pinned, and this installer will not guess one.
     Building the wrong release is not cosmetic: the Optical Trains DBus interface
     the executor bridge targets arrived in 3.8.2, and an older build would have
     Nocturne working around the absence of an interface that exists upstream.
 
-    Find the current stable tag on a machine that can reach KDE:
-        git ls-remote --tags https://invent.kde.org/education/kstars.git | grep 3.8
+    KStars does not tag modern releases — its tags stop at v17.08.3 — so this is
+    a commit, not a tag. Find the head of the stable branch for the release you
+    want on a machine that can reach KDE:
+        git ls-remote --heads https://invent.kde.org/education/kstars.git 'stable-3.8*'
     then re-run with:
-        NOCTURNE_KSTARS_VERSION=<tag> ./scripts/install.sh
+        NOCTURNE_KSTARS_REF=<40-character commit> \\
+        NOCTURNE_KSTARS_BRANCH=<stable-3.x.y> ./scripts/install.sh
 
     Or --skip-kstars to install INDI and Nocturne now and add KStars later."
     fi
+    if ! is_full_sha "${KSTARS_REF}"; then
+        fail "NOCTURNE_KSTARS_REF is '${KSTARS_REF}', which is not a full
+    40-character commit SHA. KStars has no usable tags, so a commit is the only
+    thing that pins it. Nothing has been built."
+    fi
     install_kstars_dependencies
-    fetch_source "${KSTARS_REPO}" "${KSTARS_VERSION}" "${BUILD_DIR}/kstars"
+    fetch_source "${KSTARS_REPO}" "${KSTARS_REF}" "${BUILD_DIR}/kstars" "${KSTARS_BRANCH}"
     cmake_build_install "${BUILD_DIR}/kstars" "kstars-build" -DBUILD_TESTING=OFF
     command -v kstars >/dev/null 2>&1 || fail "KStars did not install"
     ok "KStars installed"

@@ -75,23 +75,56 @@ The cost is real: one to three hours on a Pi 5, most of it KStars.
 
 Option 3, with pinning enforced rather than merely intended.
 
-`scripts/install.sh` clones each component at a **tag**, and
-`require_pinned_ref()` refuses to build anything whose checked-out commit is not
-exactly a tag. A branch name is a moving target: two installs of the same
-Nocturne commit, a week apart, would build different upstream code, and the rig
-could behave differently between two nights with nothing in this repository
-having changed. That failure mode is difficult to diagnose at 03:00 and it is
-cheap to prevent.
+`scripts/install.sh` clones each component at a **tag or a full commit SHA**,
+and `require_pinned_ref()` refuses to build anything else. A branch name is a
+moving target: two installs of the same Nocturne commit, a week apart, would
+build different upstream code, and the rig could behave differently between two
+nights with nothing in this repository having changed. That failure mode is
+difficult to diagnose at 03:00 and it is cheap to prevent.
+
+### What "pinned" means — a correction to this ADR
+
+The first version of this decision said *tag*, and the guard enforced exactly
+that. **That was wrong, and it was wrong in two separate ways.** Both surfaced
+when KStars was finally resolved (2026-08-07); neither is a KStars quirk worked
+around, and both are recorded here because the guard's model of "pinned" was the
+defect.
+
+**A full 40-character commit SHA is the strongest pin there is, and the guard
+refused it.** A tag is a label; upstream can move it or delete it, and a build
+that trusts one trusts that nobody did. A commit is the commit. Refusing a SHA
+while accepting a tag had the ordering backwards, and the cost was concrete:
+KStars looks unpinnable under that rule, because KStars does not tag modern
+releases at all.
+
+**The check asked the wrong question.** It ran
+`git describe --exact-match --tags HEAD`, which establishes that HEAD sits at
+*some* tag — never that it sits at the *requested* one. A checkout that landed
+somewhere else passed, and `versions.lock` then recorded the ref that was asked
+for beside a SHA belonging to something else, which is worse than no record
+because it reads as evidence. `indi-3rdparty` makes it concrete rather than
+theoretical: `v2.2.3` and `v2.2.3.1` are the same commit, so "HEAD is tagged"
+distinguishes nothing.
+
+The guard now accepts a full lowercase 40-hex SHA or a tag, refuses branch names
+and short SHAs, and in **both** cases verifies that HEAD is the commit that was
+asked for. A mismatch fails even under `--allow-unpinned`: that flag relaxes
+"is this pinned", never "is this the tree I was told to build".
+
+`backend/tests/unit/test_install_pinning.py` runs the shipped function against
+real git repositories — including one with two tags on a single commit, and one
+commit carrying no tag at all — and each of the three defects above was
+reproduced as a failing test before it was fixed.
 
 SPEC section 4 sets a **floor** of INDI 2.2.3, not an exact version, so the pins
 are the current upstream tags at or above it rather than the floor itself.
 
-| Component | Tag | Commit | Verified against |
+| Component | Ref | Commit | Verified against |
 |---|---|---|---|
-| `indilib/indi` | `v2.2.4` | `478d34a34e5dde5ef574bb23917618508707663d` | github.com/indilib/indi |
-| `indilib/indi-3rdparty` | `v2.2.4` | `64fbe2e2dcded132e107d764d4965e034b810a3f` | github.com/indilib/indi-3rdparty |
-| `rlancaste/stellarsolver` | `2.8` | `89377481934f40e7a84a8f91f667e37125e47ae0` | github.com/rlancaste/stellarsolver |
-| KStars | **unset** | — | **not resolved; see below** |
+| `indilib/indi` | tag `v2.2.4` | `478d34a34e5dde5ef574bb23917618508707663d` | github.com/indilib/indi |
+| `indilib/indi-3rdparty` | tag `v2.2.4` | `64fbe2e2dcded132e107d764d4965e034b810a3f` | github.com/indilib/indi-3rdparty |
+| `rlancaste/stellarsolver` | tag `2.8` | `89377481934f40e7a84a8f91f667e37125e47ae0` | github.com/rlancaste/stellarsolver |
+| KStars | commit, branch `stable-3.8.3` | `61d849b04c42217cf2f0ab956153e56a928ae8a8` | operator, 2026-08-07 |
 
 `indi` and `indi-3rdparty` are held in **lockstep**: the ZWO drivers link the
 core, and the projects tag together. `v2.2.4.1` and `v2.2.4.2` exist for the
@@ -99,31 +132,59 @@ core only, with no matching 3rdparty tag, so `v2.2.4` is the newest matched
 pair. Raising the core alone would put a driver build against a core it was not
 released with.
 
-### KStars: deliberately unpinned, and the build refuses
+**Re-checked 2026-08-07**, with the question "was the tag-only rule hiding
+anything here too?". All three GitHub pins are genuine tags and resolve to the
+commits above, unchanged. The newest tags are `v2.2.4.2` for the core — with
+still no matching 3rdparty tag — and `2.8` for StellarSolver, which is already
+the pin. So nothing moves: `v2.2.4` remains the newest matched pair, and it is
+the pair that built successfully on the Pi. The only thing the old rule hid on
+these three was the `v2.2.3` / `v2.2.3.1` duplicate noted above.
 
-`invent.kde.org` is not reachable from the environment this repository was
-developed in (`CONNECT tunnel failed, response 403`). The obvious substitute,
-the KDE mirror at `github.com/KDE/kstars`, **cannot be trusted for this**: its
-`v3.x` tags run `v3.0.0` through `v3.5.10` and then jump to `v3.80.2`,
-`v3.80.3`, `v3.90.1` … `v3.97.0`. There is no `v3.6.x` and no `v3.7.x` at all,
-and both of those series certainly shipped — KStars 3.6.3 is in Debian
-bookworm. Whatever that mirror is, it is not a complete tag list, and reading a
-release tag off it would be a second guess dressed as evidence.
+### KStars: pinned to a commit, because it has no usable tags
 
-So `KSTARS_VERSION` has **no default**. The KStars stage stops with an
-explanation and the command to resolve it:
+**KStars does not tag its modern releases.** The repository's tags stop at
+`v17.08.3`, from the KDE Release Service era; 3.x releases are cut from branches
+named `stable-3.x.y`. There is no `v3.8.3` tag and there never will be. The
+earlier note in this ADR — that the GitHub mirror's tag list looked incomplete,
+with no `v3.6.x` or `v3.7.x` — was reading a real absence and drawing the wrong
+conclusion from it. The tags are not missing from the mirror; they were never
+cut.
+
+`invent.kde.org` remains unreachable from the development environment
+(`CONNECT tunnel failed, response 403`, re-checked 2026-08-07), so the pin below
+was supplied by the operator from a machine that can reach KDE and is recorded
+on that authority. It has not been independently verified from here, and that is
+stated rather than glossed.
 
 ```
-git ls-remote --tags https://invent.kde.org/education/kstars.git | grep 3.8
-NOCTURNE_KSTARS_VERSION=<tag> ./scripts/install.sh
+KSTARS_REF    = 61d849b04c42217cf2f0ab956153e56a928ae8a8   # head of stable-3.8.3
+KSTARS_BRANCH = stable-3.8.3
 ```
+
+3.8.3 was released 1 June 2026 (kstars.kde.org). A `stable-3.8.4` branch exists
+(head `e6d2161c5e6daa0e75aa364901473f05ccc8c160`) but corresponds to no announced
+release, so it is not used.
 
 The version matters beyond currency: the Optical Trains DBus interface that the
 executor bridge targets arrived in **3.8.2**. Building an older release would
 have Nocturne working around the absence of an interface that exists upstream.
-The current stable release is reported as **3.8.3** (1 June 2026); the tag name
-and commit are to be confirmed from a machine that can reach KDE, and recorded
-here when they are.
+
+### Fetching a commit rather than a tag
+
+`git clone --depth 1 --branch X` takes a tag or a branch and never a commit, so
+a SHA-pinned component cannot be fetched the way a tagged one is. The order is:
+
+1. Ask the server for that single commit — `git fetch --depth 1 origin <sha>`,
+   which GitHub and recent GitLab both allow. One commit, no history.
+2. If the server refuses, fetch the branch named in `KSTARS_BRANCH` to a shallow
+   depth and check the commit out of it.
+
+**The branch is only a route to the commit; it is never what gets built.**
+`require_pinned_ref()` compares HEAD against the SHA afterwards either way, so a
+branch that has moved on since the pin was taken fails loudly instead of
+silently building a different commit. That verification is the part that
+matters — the fetch strategy is an implementation detail that can change, and
+the check cannot.
 
 Every build appends the component, the tag and the **resolved commit** to
 `${BUILD_DIR}/versions.lock`, which `--check` prints. That file is the record of
@@ -145,9 +206,15 @@ loudly and records the branch name in the lock file.
   interrupted build resumes; and it is a one-off per machine, not per session.
 - Upgrading INDI is an edit to one variable at the top of the installer,
   followed by a rebuild — deliberate, not incidental.
-- **KStars will not build until its tag is supplied.** That is deliberate: a
-  wrong release here is not cosmetic. `--skip-kstars` installs INDI and Nocturne
-  now and leaves KStars for later.
+- **KStars is pinned to a commit taken on the operator's authority.** It has not
+  been verified from the development environment, which cannot reach KDE. If the
+  commit is wrong, the build produces the wrong KStars silently — the guard
+  confirms HEAD *is* that commit, not that the commit *is* 3.8.3. The first
+  thing to check if Ekos behaves oddly is `kstars --version` against 3.8.3.
+- Pinning to a branch head means a future `stable-3.8.3` commit — a backport, a
+  translation update — breaks the build until the pin is re-taken. That is the
+  intended behaviour and the error says so, but it is a maintenance cost that a
+  tag would not have carried.
 - **The installer has still never been run end to end.** The stages were
   performed by hand on the reference rig, following `docs/installation.md`, and
   everything that went wrong in the process is now folded back into the script

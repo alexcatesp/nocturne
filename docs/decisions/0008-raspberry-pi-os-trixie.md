@@ -44,7 +44,7 @@ Option 3. Raspberry Pi OS 64-bit, **Trixie (Debian 13) or later**, is a
 requirement, and `scripts/install.sh` **refuses to start** on anything older.
 
 Two preflight checks run **before any compiler is invoked**, in the same spirit
-as the `KSTARS_VERSION` refusal in ADR 0006 — fail in the first ten seconds with
+as the `KSTARS_REF` refusal in ADR 0006 — fail in the first ten seconds with
 a specific reason, not an hour into a build:
 
 1. `check_os_release()` — reads `/etc/os-release`. If the OS is Debian or
