@@ -39,6 +39,33 @@ Treat `backend/nocturne/safety/` as the most important code in the repository. I
    operation or to parking. It never degrades to uncontrolled motion.
 5. The watchdog process does not depend on the FastAPI process to function.
 
+**A test that asserts an absence must prove it can detect a presence.**
+
+"No module writes to config." "No motion vector appears in the bench script." "The scan
+found no offenders." Every one of those tests passes by finding nothing — and *finding
+nothing* is what a broken detector does too. A green suite then means nothing at all,
+which is worse than a red one, because it reads as evidence.
+
+Measured, not hypothetical: four separate mutations to the structural suite —
+`python_sources()` returning `[]`, the disk-write detector disabled, the motion-property
+list emptied, the unresolved-property list emptied — each left every one of its 27 tests
+green while five safety invariants enforced nothing.
+
+So, for any test whose passing condition is that something was *not* found:
+
+- **Write a positive control.** Point the same detector at something that breaks the rule
+  on purpose, and assert it is caught. A synthetic offender in the test file is enough; it
+  does not need to be a real module.
+- **Assert the scan saw something.** If the check walks a list of files, names or calls,
+  assert that list is non-empty, and that it contains something known to exist.
+- **Make shared helpers raise rather than return empty.** A helper that quietly returns
+  nothing disarms every test built on it at once; one that raises turns that into a wall
+  of failures.
+- **Prove it bites before trusting it.** Break the thing the test guards, watch it go red,
+  put it back. A structural test that has never been seen to fail has not been tested.
+
+This applies to tests written from now on, not only to the ones that have been fixed.
+
 ## 3. Methodology: spec-driven, TDD against simulators
 
 INDI ships simulator drivers. **The entire test suite runs without hardware**, in CI. This
