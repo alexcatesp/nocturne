@@ -112,17 +112,60 @@ wc -c kstars-at-rest.xml
 grep -c '<method name=' kstars-at-rest.xml
 ```
 
-**Expected:** tens of kilobytes and well over a hundred methods. A file of a few hundred
-bytes means the recursion did not descend — send it anyway and say so.
+**Expected:** tens of kilobytes and well over a hundred methods.
 
-A quick look at the shape of it, for your own reassurance:
+**Observed on the reference rig, 2026-08-07: 570 bytes and 3 methods.** The recursion did
+not descend — three methods is `Introspect`, `Ping` and `GetMachineId`, which is what the
+root node answers when it advertises no children. `--recurse` walks `<node name="…"/>`
+entries, and there were none to walk. Do not conclude that KStars publishes nothing; it
+means `/` is not a route to what it publishes. Go to 3c.
+
+### 3c. When `/` says nothing — enumerate the paths instead
 
 ```bash
-busctl --user tree org.kde.kstars | head -40
+busctl --user tree org.kde.kstars > dbus-tree.txt; cat dbus-tree.txt
 ```
 
-**This file alone is enough to unblock issue #2.** If anything below goes wrong, stop and
-send me this one.
+`busctl` walks the tree itself rather than trusting one node to describe it. If that lists
+object paths, introspect each of them directly:
+
+```bash
+grep -o '^ *[|`]*-*/.*' dbus-tree.txt | tr -d ' |`-' | sort -u > object-paths.txt
+while read -r path; do
+  echo "=== ${path}"
+  gdbus introspect --session --dest org.kde.kstars --object-path "${path}" --xml
+done < object-paths.txt > kstars-objects.xml
+grep -c '<method name=' kstars-objects.xml
+```
+
+If `busctl` lists nothing either, try the paths KStars is expected to use, and let the
+failures tell you which are real:
+
+```bash
+for path in /KStars /kstars /KStars/INDI /KStars/Ekos /KStars/Ekos/Scheduler; do
+  echo "=== ${path}"
+  gdbus introspect --session --dest org.kde.kstars --object-path "${path}" --xml 2>&1 | head -3
+done
+```
+
+### 3d. The source tree says the same thing, and does not need a running KStars
+
+KStars generates its DBus adaptors from interface XML checked into the repository. Those
+files *are* the interface definition, in the format wanted here, and they are on the Pi
+already:
+
+```bash
+find ~/.cache/nocturne-build/kstars -name '*.xml' \
+  \( -name 'org.kde.kstars*' -o -path '*dbus*' \) | sort
+```
+
+This is evidence of the same kind as an introspection dump — generated from the tree that
+was built, not written by the author of the bridge — and it does not depend on
+introspection working at all. **If step 3b came back small, run this: it may be the whole
+answer.**
+
+**One of 3b, 3c or 3d is enough to unblock issue #2.** If anything below goes wrong, stop
+and send me whichever of them produced something.
 
 ---
 
