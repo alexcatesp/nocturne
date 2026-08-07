@@ -262,8 +262,9 @@ busctl --user tree org.kde.kstars | grep -i -E 'ekos|train'
 Introspect each path that appears — **not** `/` with `--recurse`, for the reason in 3b:
 
 ```bash
-busctl --user tree org.kde.kstars | tr -d ' |`-' | grep '^/KStars' | sort -u \
-  > ekos-paths.txt
+# grep -o, not tr: busctl draws the tree with box characters, not | and -.
+# Capital K also excludes the /kstars/MainWindow_1 menu-action branch.
+busctl --user tree org.kde.kstars | grep -o '/KStars[^ ]*' | sort -u > ekos-paths.txt
 while read -r path; do
   echo "===== ${path}"
   gdbus introspect --session --dest org.kde.kstars --object-path "${path}" --xml
