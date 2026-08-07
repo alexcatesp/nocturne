@@ -174,6 +174,33 @@ def mutating_transport_calls(source: str, *, module: str) -> list[str]:
     return offenders
 
 
+def code_string_literals(source: str) -> list[str]:
+    """String constants a module *uses*, excluding docstrings.
+
+    Prose has to be able to name a thing in order to explain why it is
+    forbidden — the module docstring of nocturne.executor.link tabulates
+    FILTER_NAME precisely to say the driver is wrong about it. Comments never
+    reach the AST at all; docstrings do, and are excluded here.
+    """
+    tree = ast.parse(source)
+    docstrings = {
+        id(node.body[0].value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
+        and node.body
+        and isinstance(node.body[0], ast.Expr)
+        and isinstance(node.body[0].value, ast.Constant)
+        and isinstance(node.body[0].value.value, str)
+    }
+    return [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and id(node) not in docstrings
+    ]
+
+
 def module_name(path: Path) -> str:
     relative = path.relative_to(PACKAGE_ROOT).with_suffix("")
     parts = [part for part in relative.parts if part != "__init__"]
@@ -517,6 +544,94 @@ class TestRARunningIsNotTreatedAsMotion:
         assert recorded["RASTATUS"].values["RARunning"] == "Busy"
         assert recorded["DESTATUS"].values["DERunning"] == "Busy"
         assert recorded["TELESCOPE_TRACK_STATE"].values["TRACK_OFF"] is True
+
+
+class TestFilterNamesAreNeverReadFromTheDriver:
+    """docs/FIELD-NOTES-M1.md section 10.2.
+
+    The EFW arrived holding ZWO factory names — Red, Green, Blue, H_Alpha, SII,
+    OIII, LPR, Luminance — none of which is in the wheel. Slot 4 reads H_Alpha
+    and holds B. Anything that believed the driver would file B frames as
+    H-Alpha, and nothing in the image would look wrong: no artefact, no error,
+    just a calibration library quietly indexed against the wrong channel.
+
+    So the direction is one-way. ``equipment.yaml`` is the source of truth,
+    Nocturne writes FILTER_NAME on connect, and no code path reads it back into
+    a decision. Reading it to *log* what was overwritten is allowed, and is what
+    the one permitted reader does.
+    """
+
+    #: The one place allowed to read FILTER_NAME, and only to report the
+    #: overwrite. Anything else added here needs a reason in the diff.
+    MODULES_THAT_MAY_READ_FILTER_NAME = frozenset({"nocturne.executor.instruments"})
+
+    #: Naming either of these in code means addressing the driver's own names.
+    FILTER_NAME_PROPERTIES = ("FILTER_NAME", "FILTER_SLOT_NAME")
+
+    def names_the_drivers_filters(self, source: str) -> list[str]:
+        return [
+            literal
+            for literal in code_string_literals(source)
+            if any(name in literal for name in self.FILTER_NAME_PROPERTIES)
+        ]
+
+    def test_no_module_reads_the_drivers_filter_names(self) -> None:
+        offenders: list[str] = []
+        for path in python_sources():
+            name = module_name(path)
+            if name in self.MODULES_THAT_MAY_READ_FILTER_NAME:
+                continue
+            found = self.names_the_drivers_filters(path.read_text(encoding="utf-8"))
+            offenders.extend(f"{name}: {literal!r}" for literal in found)
+        assert not offenders, (
+            f"{'; '.join(offenders)}\n"
+            "FILTER_NAME belongs to the driver and the driver is wrong about it. "
+            "Read filter_wheel.slots from configuration instead."
+        )
+
+    def test_the_permitted_reader_only_writes_and_logs(self) -> None:
+        """The exemption is narrow: it may name the property, not act on it."""
+        from nocturne.executor import instruments
+
+        source = inspect.getsource(instruments)
+        # The one read is the comparison that produces the warning.
+        assert "disagree with equipment.yaml" in source
+        assert "set_property(device, FILTER_NAME" in source
+
+    def test_the_detector_catches_a_module_that_does_read_them(self) -> None:
+        """Positive control — CLAUDE.md section 2.
+
+        This test passes by finding nothing, and finding nothing is what a
+        broken scan does too. So the same predicate is pointed at a module that
+        reads the driver's names on purpose, and must catch it.
+        """
+        offender = (
+            "async def choose(executor, device):\n"
+            "    names = executor.get_property(device, 'FILTER_NAME')\n"
+            "    return names['FILTER_SLOT_NAME_4']\n"
+        )
+        assert sorted(self.names_the_drivers_filters(offender)) == [
+            "FILTER_NAME",
+            "FILTER_SLOT_NAME_4",
+        ]
+
+    def test_the_detector_ignores_prose_that_explains_the_rule(self) -> None:
+        """Otherwise the rule could not be documented where it applies."""
+        innocent = '''"""FILTER_NAME is the driver's and the driver is wrong."""\n'''
+        assert self.names_the_drivers_filters(innocent) == []
+
+    def test_configuration_is_where_the_filter_names_live(self, config_dir: Path) -> None:
+        """The thing the rule points at instead."""
+        from nocturne.schemas import load_equipment_config
+
+        wheel = load_equipment_config(config_dir / "equipment.yaml").filter_wheel
+        assert [slot.name for slot in wheel.populated_slots.values()] == [
+            "L",
+            "R",
+            "G",
+            "B",
+            "Dark",
+        ]
 
 
 class TestRuleEvaluation:
