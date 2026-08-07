@@ -195,6 +195,10 @@ class TestPerformRequiresAnApproval:
 class TestCommandRegistryMatchesTheExecutor:
     def test_every_registered_command_can_be_performed(self) -> None:
         """A command the governor allows but the executor cannot run is a gap."""
+        assert COMMAND_RULES, (
+            "the command registry is empty, so this loop checks nothing. "
+            "Every command type the governor knows about belongs in it."
+        )
         source = inspect.getsource(Executor._perform)
         for command_type in COMMAND_RULES:
             assert command_type.__name__ in source, (

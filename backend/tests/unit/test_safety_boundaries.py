@@ -58,33 +58,120 @@ WRITING_METHODS = frozenset(
 
 def write_calls(path: Path) -> list[tuple[int, str]]:
     """Every call in ``path`` that writes to disk, as (line number, description)."""
+    return write_calls_in_source(path.read_text(encoding="utf-8"))
+
+
+def write_calls_in_source(source: str) -> list[tuple[int, str]]:
+    """The detector itself, over source text, so it can be tested on a fixture."""
     found: list[tuple[int, str]] = []
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
             continue
-        if node.func.attr in WRITING_METHODS:
-            found.append((node.lineno, f"{node.func.attr}()"))
-        elif node.func.attr == "open" and _opens_for_writing(node):
+        # Both forms matter. Path("x").write_text(...) is an Attribute call;
+        # the builtin open("x", "w") is a Name call, and looking only at
+        # Attribute calls missed it entirely — a module could have written
+        # anywhere it liked through the builtin and this check would have said
+        # nothing. Found by pointing the detector at a module that writes on
+        # purpose; see TestTheDetectorsActuallyDetect.
+        if isinstance(node.func, ast.Attribute):
+            if node.func.attr in WRITING_METHODS:
+                found.append((node.lineno, f"{node.func.attr}()"))
+            elif node.func.attr == "open" and _opens_for_writing(node, mode_index=0):
+                # Path("x").open("w") — the mode is the first argument.
+                found.append((node.lineno, "open(...)"))
+        # open("x", "w") — the first argument is the path, the mode is second.
+        elif (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "open"
+            and _opens_for_writing(node, mode_index=1)
+        ):
             found.append((node.lineno, "open(...)"))
     return found
 
 
-def _opens_for_writing(node: ast.Call) -> bool:
+def _opens_for_writing(node: ast.Call, *, mode_index: int) -> bool:
+    """Whether this open() call asks for a writable handle.
+
+    ``mode_index`` is where the mode sits positionally, which differs between
+    the two spellings: ``Path(p).open("w")`` puts it first, ``open(p, "w")``
+    second. Reading the wrong slot means reading the *path* as if it were the
+    mode — and any path containing w, a, x or + then looks like a write, which
+    is how ``open("x")`` was briefly reported as one.
+    """
     modes = [
         keyword.value.value
         for keyword in node.keywords
         if keyword.arg == "mode" and isinstance(keyword.value, ast.Constant)
     ]
-    modes += [
-        argument.value for argument in node.args[:1] if isinstance(argument, ast.Constant)
-    ]
+    if len(node.args) > mode_index:
+        argument = node.args[mode_index]
+        if isinstance(argument, ast.Constant):
+            modes.append(argument.value)
     return any(character in str(mode) for mode in modes for character in "wax+")
 
 
+#: Modules that certainly exist. If the scan cannot see these, it is not
+#: looking at the package, and every verdict built on it is worthless.
+KNOWN_MODULES = ("nocturne.safety.governor", "nocturne.executor.executor", "nocturne.main")
+
+
 def python_sources() -> list[Path]:
-    """Every module in the nocturne package."""
-    return sorted(PACKAGE_ROOT.glob("nocturne/**/*.py"))
+    """Every module in the nocturne package.
+
+    Raises rather than returning an empty or partial list. Every structural
+    test below asks "did the scan find an offender?", and a scan that found
+    nothing because it is broken is indistinguishable from a clean tree — the
+    whole suite goes green while enforcing nothing. Making the helper raise
+    turns that into five red tests instead of five silent passes.
+    """
+    found = sorted(PACKAGE_ROOT.glob("nocturne/**/*.py"))
+    if not found:
+        raise AssertionError(
+            f"the source scan found no modules under {PACKAGE_ROOT}. Every "
+            "structural test in this file depends on it; none of them mean "
+            "anything until this is fixed."
+        )
+    seen = {module_name(path) for path in found}
+    missing = [name for name in KNOWN_MODULES if name not in seen]
+    if missing:
+        raise AssertionError(
+            f"the source scan did not see {missing}, which certainly exist. It "
+            "is looking in the wrong place, and the structural tests below are "
+            "not enforcing what they claim."
+        )
+    return found
+
+
+def transport_imports(source: str, *, module: str) -> list[str]:
+    """Imports of the INDI transport, which only the executor package may make."""
+    offenders: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith(
+            "nocturne.executor.indi"
+        ):
+            offenders.append(f"{module} imports {node.module}")
+        elif isinstance(node, ast.Import):
+            offenders.extend(
+                f"{module} imports {alias.name}"
+                for alias in node.names
+                if alias.name.startswith("nocturne.executor.indi")
+            )
+    return offenders
+
+
+def mutating_transport_calls(source: str, *, module: str) -> list[str]:
+    """Calls that reach the instrument around the Executor rather than through it."""
+    offenders: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in MUTATING_TRANSPORT_METHODS
+            and isinstance(node.func.value, ast.Attribute)
+            and node.func.value.attr in {"client", "_client", "ekos", "_ekos"}
+        ):
+            offenders.append(f"{module}:{node.lineno} calls .{node.func.attr}()")
+    return offenders
 
 
 def module_name(path: Path) -> str:
@@ -100,6 +187,125 @@ def install_rules(monkeypatch: pytest.MonkeyPatch, rules: tuple[Rule, ...]) -> N
     registry: dict[type[Command], tuple[Rule, ...]] = dict(governor_module.COMMAND_RULES)
     registry[ConnectDevice] = rules
     monkeypatch.setattr(governor_module, "COMMAND_RULES", registry)
+
+
+#: A module that breaks every rule in this file at once. Each detector below is
+#: pointed at it and must find its own offence. Kept as source text rather than
+#: a file so that nothing can accidentally import it.
+OFFENDING_SOURCE = """
+from pathlib import Path
+
+from nocturne.executor.indi.client import IndiClient
+
+
+class Rogue:
+    def go(self) -> None:
+        self._client.write("EQMod Mount", "EQUATORIAL_EOD_COORD", {"RA": 5.0})
+        self.ekos.connect_device("EQMod Mount")
+        Path("config/safety.yaml").write_text("altitude_min_deg: 0")
+        Path("/tmp/x").mkdir()
+        with open("out.fits", "w") as handle:
+            handle.writelines(["data"])
+        if self.status["RARunning"] == "Busy":
+            self.slew()
+"""
+
+
+class TestTheDetectorsActuallyDetect:
+    """Before any verdict in this file is worth reading.
+
+    Every test below asks "did the scan find an offender?", and answers "no" by
+    passing. That makes a broken scan and a clean tree indistinguishable — the
+    suite goes green while enforcing nothing at all. It is the same failure that
+    made the bench-script motion test pass vacuously once the script stopped
+    calling write().
+
+    So each detector is pointed at a module that breaks the rule on purpose, and
+    must catch it. If one of these fails, no other result in this file means
+    anything.
+    """
+
+    def test_the_source_scan_sees_the_package(self) -> None:
+        """The single point of failure: five tests below share this helper."""
+        found = python_sources()
+        assert len(found) > 10, found
+        assert {module_name(path) for path in found} >= set(KNOWN_MODULES)
+
+    def test_the_source_scan_refuses_to_look_in_the_wrong_place(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An empty scan must raise, not return nothing and let tests pass."""
+        monkeypatch.setattr("tests.unit.test_safety_boundaries.PACKAGE_ROOT", tmp_path)
+        with pytest.raises(AssertionError, match="found no modules"):
+            python_sources()
+
+    def test_the_write_detector_finds_every_way_of_writing(self) -> None:
+        found = {description for _, description in write_calls_in_source(OFFENDING_SOURCE)}
+        assert found >= {"write_text()", "mkdir()", "writelines()", "open(...)"}, found
+
+    def test_the_write_detector_ignores_reads(self) -> None:
+        """A detector that fires on everything is as useless as one that never does.
+
+        The paths here are chosen to be nasty: "wax.txt" contains three
+        characters that appear in write modes. Reading the wrong argument slot
+        would report every one of these as a write.
+        """
+        innocent = (
+            'Path("wax.txt").read_text()\n'
+            'open("wax.txt")\n'
+            'open("wax.txt", "r")\n'
+            'open("wax.txt", mode="rb")\n'
+            'Path("wax.txt").open("r")\n'
+        )
+        assert write_calls_in_source(innocent) == []
+
+    def test_the_write_detector_finds_both_spellings_of_open(self) -> None:
+        assert write_calls_in_source('open("f", "w")\n')
+        assert write_calls_in_source('Path("f").open("w")\n')
+        assert write_calls_in_source('open("f", mode="a")\n')
+
+    def test_the_transport_import_detector_fires(self) -> None:
+        assert transport_imports(OFFENDING_SOURCE, module="rogue")
+
+    def test_the_transport_import_detector_ignores_the_facade(self) -> None:
+        allowed = "from nocturne.executor import Executor\n"
+        assert transport_imports(allowed, module="rogue") == []
+
+    def test_the_mutating_call_detector_fires(self) -> None:
+        found = mutating_transport_calls(OFFENDING_SOURCE, module="rogue")
+        assert len(found) >= 2, found
+
+    def test_the_mutating_call_detector_ignores_the_gated_methods(self) -> None:
+        """Executor.set_property is the sanctioned path and must not be flagged."""
+        allowed = 'self._executor.set_property("d", "P", {})\n'
+        assert mutating_transport_calls(allowed, module="rogue") == []
+
+    def test_the_configuration_filename_detector_fires(self) -> None:
+        named = [name for name in CONFIGURATION_FILENAMES if name in OFFENDING_SOURCE]
+        assert named
+        assert write_calls_in_source(OFFENDING_SOURCE)
+
+    def test_the_unresolved_property_detector_fires(self) -> None:
+        names = TestRARunningIsNotTreatedAsMotion.UNRESOLVED_MOTION_PROPERTIES
+        assert names, "the name list is empty; the test that uses it enforces nothing"
+        assert any(name in OFFENDING_SOURCE for name in names)
+
+    def test_the_motion_property_detector_fires(self) -> None:
+        assert MOVING_PROPERTIES, "the list is empty; the bench test enforces nothing"
+        written = properties_written_by_source(OFFENDING_SOURCE)
+        assert written & set(MOVING_PROPERTIES)
+
+    def test_every_name_list_this_file_relies_on_is_populated(self) -> None:
+        """Emptying one of these silently disarms its test."""
+        for label, names in (
+            ("MUTATING_TRANSPORT_METHODS", MUTATING_TRANSPORT_METHODS),
+            ("CONFIGURATION_FILENAMES", CONFIGURATION_FILENAMES),
+            ("WRITING_METHODS", WRITING_METHODS),
+            ("MOVING_PROPERTIES", MOVING_PROPERTIES),
+            ("MUTATING_CALLS", MUTATING_CALLS),
+            ("KNOWN_MODULES", KNOWN_MODULES),
+        ):
+            assert names, f"{label} is empty"
 
 
 class TestTheExecutorExposesNoTransportHandle:
@@ -138,18 +344,7 @@ class TestTheTransportIsConfinedToTheExecutorPackage:
             name = module_name(path)
             if name.startswith(EXECUTOR_PACKAGE):
                 continue
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-            for node in ast.walk(tree):
-                if isinstance(node, ast.ImportFrom) and (node.module or "").startswith(
-                    "nocturne.executor.indi"
-                ):
-                    offenders.append(f"{name} imports {node.module}")
-                elif isinstance(node, ast.Import):
-                    offenders.extend(
-                        f"{name} imports {alias.name}"
-                        for alias in node.names
-                        if alias.name.startswith("nocturne.executor.indi")
-                    )
+            offenders.extend(transport_imports(path.read_text(encoding="utf-8"), module=name))
         assert not offenders, (
             "the INDI transport must be reachable only from within "
             f"{EXECUTOR_PACKAGE}: {'; '.join(offenders)}"
@@ -164,16 +359,9 @@ class TestTheTransportIsConfinedToTheExecutorPackage:
             name = module_name(path)
             if name.startswith(EXECUTOR_PACKAGE) or name.startswith("nocturne.safety"):
                 continue
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-            for node in ast.walk(tree):
-                if (
-                    isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Attribute)
-                    and node.func.attr in MUTATING_TRANSPORT_METHODS
-                    and isinstance(node.func.value, ast.Attribute)
-                    and node.func.value.attr in {"client", "_client", "ekos", "_ekos"}
-                ):
-                    offenders.append(f"{name}:{node.lineno} calls .{node.func.attr}()")
+            offenders.extend(
+                mutating_transport_calls(path.read_text(encoding="utf-8"), module=name)
+            )
         assert not offenders, "; ".join(offenders)
 
 
@@ -421,8 +609,13 @@ MUTATING_CALLS = frozenset(
 
 def properties_written_by(path: Path) -> set[str]:
     """String constants handed to any call that reaches the instrument."""
+    return properties_written_by_source(path.read_text(encoding="utf-8"))
+
+
+def properties_written_by_source(source: str) -> set[str]:
+    """The detector itself, over source text, so it can be tested on a fixture."""
     written: set[str] = set()
-    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+    for node in ast.walk(ast.parse(source)):
         if (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
