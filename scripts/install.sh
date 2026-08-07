@@ -29,6 +29,7 @@
 # Usage:
 #   ./scripts/install.sh                 install everything
 #   ./scripts/install.sh --check         verify an existing install, change nothing
+#   ./scripts/install.sh --check-packages   list Qt6/KF6 names apt does not know
 #   ./scripts/install.sh --help          full option list
 
 set -euo pipefail
@@ -143,7 +144,9 @@ usage() {
 
 Options:
   --check              verify an existing installation and exit
-  --allow-unpinned     permit a non-tag upstream ref (build is not reproducible)
+  --check-packages     print Qt6/KF6 package names apt does not know, and exit.
+                       Silence means the list is good on this release.
+  --allow-unpinned     permit an unpinned upstream ref (build is not reproducible)
   --build-dir DIR      where to clone and build (default ~/.cache/nocturne-build)
   --index-dir DIR      where to put astrometry indices (default /usr/share/astrometry)
   --jobs N             parallel compile jobs (default: nproc)
@@ -533,6 +536,35 @@ check_os_release() {
 # Distinguishes "not installed but in the archive" from "apt has never heard of
 # this name", because the second means the package list is wrong for this
 # release and no amount of apt-get will fix it.
+# --check-packages: name every Qt6/KF6 package apt does not recognise, and
+# nothing else. Silence means the whole list is good on this release.
+#
+# Separate from check_kstars_build_dependencies() on purpose. That one is a
+# preflight gate: it runs inside an install, stops it, and explains at length.
+# This one answers a single question, prints one name per line, and is meant to
+# be pasted into a terminal on the Pi and the output pasted back. Both read the
+# same two arrays, so neither can drift from what the install would use.
+report_unknown_packages() {
+    local wanted=("${QT6_BUILD_PACKAGES[@]}" "${KF6_BUILD_PACKAGES[@]}")
+
+    # One apt-cache call, not one per package: `apt-cache policy` silently omits
+    # names it does not know, so what comes back is the set that exists and the
+    # difference is the answer. Twenty-four separate `apt-cache show` calls took
+    # 31 seconds; this takes one.
+    local known
+    known="$(apt-cache policy "${wanted[@]}" 2>/dev/null |
+        sed -n 's/^\([^ :][^:]*\):$/\1/p')"
+
+    local package unknown=()
+    for package in "${wanted[@]}"; do
+        grep -qxF "${package}" <<<"${known}" || unknown+=("${package}")
+    done
+
+    (( ${#unknown[@]} == 0 )) && return 0
+    printf '%s\n' "${unknown[@]}"
+    return 1
+}
+
 check_kstars_build_dependencies() {
     if [[ ${SKIP_KSTARS} -eq 1 ]]; then
         info "KStars skipped; not checking Qt6/KF6"
@@ -900,6 +932,7 @@ main() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --check)        CHECK_ONLY=1 ;;
+            --check-packages) report_unknown_packages; exit $? ;;
             --allow-unpinned) ALLOW_UNPINNED=1 ;;
             --build-dir)    BUILD_DIR="$2"; VERSIONS_LOCK="${BUILD_DIR}/versions.lock"; shift ;;
             --index-dir)    INDEX_DIR="$2"; shift ;;
