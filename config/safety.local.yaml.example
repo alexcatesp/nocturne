@@ -1,0 +1,36 @@
+# Per-rig safety overrides — copy to `safety.local.yaml` and edit.
+#
+#     cp config/safety.local.yaml.example config/safety.local.yaml
+#
+# `safety.local.yaml` is gitignored, and it is the file your measured meridian
+# limits belong in: they are a property of your tripod, your tube and your
+# camera, and they are wrong for anyone else's rig.
+#
+# READ THIS BEFORE PUTTING ANYTHING HERE.
+#
+# These values decide whether ~10 kg of glass swings into a tripod leg at three
+# in the morning with nobody watching. A value here silently overrides the
+# shipped one. `nocturne check-config` prints every override with the value it
+# displaced — read that output after every change, and read it again before the
+# first unattended night.
+#
+# Nocturne never writes this file. Not the agent, not the API, not the
+# orchestrator: `meridian.calibrated` becomes true only because a human typed
+# it after performing docs/meridian-calibration.md. That is enforced in code
+# and by a test, and it is the reason this file exists rather than a settings
+# screen.
+
+# limits:
+#   meridian:
+#     # false until YOU have measured it. Supervised and autonomous modes are
+#     # refused while it is false — a hard failure with an explicit message,
+#     # never a warning and never a permissive default (SPEC section 9.1).
+#     calibrated: false
+#     calibration_date: "2026-01-01"
+#     # Hour angle, in degrees, at which the tube must stop on each side.
+#     # Measured on your own rig: docs/meridian-calibration.md. West is
+#     # positive, east negative. Both are required once calibrated is true.
+#     hour_angle_west_limit_deg: 0.0
+#     hour_angle_east_limit_deg: 0.0
+#     # Subtracted from both limits before they are enforced.
+#     safety_margin_deg: 5

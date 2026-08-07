@@ -1,0 +1,16 @@
+# Per-operator agent overrides — copy to `agent.local.yaml` and edit.
+#
+#     cp config/agent.local.yaml.example config/agent.local.yaml
+#
+# `agent.local.yaml` is gitignored.
+#
+# The autonomy level is the one setting here that matters. Nocturne ships in
+# `advisory`, where every action needs your approval. Raising it is a decision
+# you make deliberately, in this file, by hand — the agent cannot raise its own
+# level, which is enforced in code rather than trusted (CLAUDE.md invariant 2).
+#
+# No API key goes in this file or any other. Nocturne reads it from the
+# environment; a key in a config file gets pasted into a bug report eventually.
+
+# autonomy_level: advisory
+# poll_interval_minutes: 10

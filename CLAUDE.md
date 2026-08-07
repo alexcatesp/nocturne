@@ -122,6 +122,13 @@ all text. Night mode (red on black) is the default theme, not an option.
 **No magic numbers.** Every threshold, timeout, tolerance and limit comes from validated
 YAML config. If you are typing a number into a comparison, it belongs in a config file.
 
+**Shipped config is a placeholder and is never edited by an operator.** `config/*.yaml`
+is tracked so its defaults can be asserted; the operator's real values live in an
+untracked `config/*.local.yaml` merged over it (ADR 0013). A new per-site setting goes in
+the shipped file with a placeholder and in the matching `.local.yaml.example`. Nothing in
+`nocturne` writes either one, and neither do the tests — use the `writable_config_dir`
+fixture, never `config_dir`, if a test needs to write.
+
 **No hardcoded equipment.** Focal lengths, pixel sizes, plate scales, guide scales — all
 config. The operator plans to migrate from guide scope to OAG and to add a coma corrector;
 both must be config changes, not code changes.

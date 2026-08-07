@@ -21,6 +21,8 @@ from nocturne.devices import (
 )
 from nocturne.schemas import ConfigError, NocturneConfig, load_config_bundle
 from nocturne.schemas.equipment import Site
+from nocturne.schemas.layering import Override
+from nocturne.schemas.loader import ConfigSources, FileSources
 from nocturne.storage import describe_storage, inspect_storage
 
 DEFAULT_CONFIG_DIR = Path("config")
@@ -79,8 +81,45 @@ def _format_report(config: NocturneConfig) -> str:
             f"{config.agent.poll_interval_minutes} min)",
             *_storage_lines(),
             meridian_line,
+            *_source_lines(config.sources),
         ]
     )
+
+
+def _source_lines(sources: ConfigSources) -> list[str]:
+    """Where each value came from — the shipped file or the local override.
+
+    A configuration assembled from two files is one where "I changed that" and
+    "the change took effect" are different statements. The only way to tell them
+    apart from a terrace at night is to be told, so this is not optional detail:
+    an override file with a misspelled top-level key merges cleanly, changes
+    nothing, and looks exactly like one that worked.
+    """
+    lines = ["", "  Configuration sources:"]
+    for file_sources in sources.all_sources():
+        lines.extend(_file_source_lines(file_sources))
+    if not any(source.is_layered for source in sources.all_sources()):
+        lines.append("")
+        lines.append("    No local override files. Every value above is the shipped")
+        lines.append("    default. See config/equipment.local.yaml.example.")
+    return lines
+
+
+def _file_source_lines(sources: FileSources) -> list[str]:
+    if not sources.is_layered:
+        return [f"    {sources.shipped}"]
+    lines = [
+        f"    {sources.shipped}",
+        f"      + {sources.local}  ({len(sources.overrides)} value(s))",
+    ]
+    lines.extend(f"          {_override_line(override)}" for override in sources.overrides)
+    return lines
+
+
+def _override_line(override: Override) -> str:
+    if not override.was_present:
+        return f"{override.key} = {override.value!r}  (not in the shipped file)"
+    return f"{override.key} = {override.value!r}  (shipped: {override.previous!r})"
 
 
 def _site_lines(site: Site) -> list[str]:
@@ -95,8 +134,12 @@ def _site_lines(site: Site) -> list[str]:
         return []
     return [
         "  !! THE SITE COORDINATES ARE STILL THE SHIPPED PLACEHOLDER.",
-        "     Replace site.latitude and site.longitude in config/equipment.yaml",
-        "     with your own, to four decimal places, before observing.",
+        "     Put your own, to four decimal places, in",
+        "     config/equipment.local.yaml — which git ignores, so it survives",
+        "     every pull and never leaves this machine. Copy",
+        "     config/equipment.local.yaml.example to start.",
+        "     Do NOT edit config/equipment.yaml: it is version-controlled, and",
+        "     an edit there collides with every update and can be pushed.",
         "     Until you do, sunrise and sunset, target altitudes and the",
         "     meridian crossing times are all computed for somewhere else, and",
         "     nothing will report an error — the frames will simply be wrong.",

@@ -586,6 +586,53 @@ replaced with what the machine says.
 
 ---
 
+## 10.5 Your own settings go in a file git does not track
+
+**Do not edit `config/equipment.yaml`.** It is version-controlled, so an edit there
+collides with every `git pull` — and it can be pushed, which for the site coordinates
+means publishing where the equipment lives.
+
+Put your values beside it instead:
+
+```bash
+cp config/equipment.local.yaml.example config/equipment.local.yaml
+$EDITOR config/equipment.local.yaml
+```
+
+`config/*.local.yaml` is gitignored. It survives every update, is never committed, and
+holds only the values you changed — so an upgrade that adds a new setting still reaches
+you with its default. There is one for each file:
+
+| Edit this | Instead of | For |
+|---|---|---|
+| `equipment.local.yaml` | `equipment.yaml` | site coordinates, mount port |
+| `safety.local.yaml` | `safety.yaml` | your measured meridian limits |
+| `agent.local.yaml` | `agent.yaml` | autonomy level |
+
+Only what you want to change needs to appear. Mappings merge key by key, so setting
+`site.latitude` leaves the rest of `site` alone. Lists do not merge: giving
+`filter_wheel.slots` replaces the whole wheel.
+
+**Then check it took.**
+
+```bash
+.venv/bin/nocturne check-config
+```
+
+The report ends with a `Configuration sources:` section listing every value your local
+file set, beside the shipped value it displaced. **If something you wrote is not in that
+list, it did not take effect** — a misspelled top-level key merges cleanly and does
+nothing. A misspelled key *inside* a section is caught and named, along with the file it
+came from.
+
+> That report prints your site coordinates. If you paste it into a bug report or a forum
+> post, take them out first — it is the same information the shipped placeholder exists to
+> keep out of the repository.
+
+See `docs/decisions/0013-local-configuration-overrides.md`.
+
+---
+
 ## 11. Backup
 
 **Do this the moment the stack works.** Power down, remove the card or drive, and image it

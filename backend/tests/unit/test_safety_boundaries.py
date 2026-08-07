@@ -48,7 +48,17 @@ MUTATING_TRANSPORT_METHODS = frozenset(
 MODULES_THAT_MAY_WRITE: frozenset[str] = frozenset()
 
 #: The configuration files. No module may write one, allowlisted or not.
-CONFIGURATION_FILENAMES = ("equipment.yaml", "safety.yaml", "agent.yaml")
+#: The `.local.yaml` overrides count: `safety.local.yaml` sets the meridian
+#: limits just as `safety.yaml` does, so a module that could write one could
+#: raise its own limits, which is CLAUDE.md invariant 2 (ADR 0013).
+CONFIGURATION_FILENAMES = (
+    "equipment.yaml",
+    "safety.yaml",
+    "agent.yaml",
+    "equipment.local.yaml",
+    "safety.local.yaml",
+    "agent.local.yaml",
+)
 
 #: Calls that put bytes on disk.
 WRITING_METHODS = frozenset(
@@ -445,21 +455,44 @@ class TestConfigurationIsNotWritable:
         assert not offenders, "; ".join(offenders)
 
     def test_loading_the_configuration_does_not_change_it_on_disk(
-        self, config_dir: Path
+        self, writable_config_dir: Path
     ) -> None:
-        """The behavioural counterpart to the source scan."""
+        """The behavioural counterpart to the source scan.
+
+        Runs on a copy, with the local overrides present, because a loader that
+        repaired, normalised or rewrote one would be doing it to the file that
+        carries the meridian limits. A copy because the first version of this
+        test wrote those overrides into the repository's own config/ — which
+        changed the shipped safety margin under another test's feet, and on the
+        rig would have quietly overridden the operator's real limits.
+        """
+        config_dir = writable_config_dir
+        (config_dir / "safety.local.yaml").write_text(
+            "limits:\n  meridian:\n    safety_margin_deg: 6\n", encoding="utf-8"
+        )
+        (config_dir / "equipment.local.yaml").write_text(
+            'site:\n  name: "Elsewhere"\n', encoding="utf-8"
+        )
+        present = [name for name in CONFIGURATION_FILENAMES if (config_dir / name).exists()]
+        assert len(present) == 5, present
+
         before = {
             name: hashlib.sha256((config_dir / name).read_bytes()).hexdigest()
-            for name in CONFIGURATION_FILENAMES
+            for name in present
         }
-        governor = SafetyGovernor(load_config_bundle(config_dir).safety)
+        config = load_config_bundle(config_dir)
+        governor = SafetyGovernor(config.safety)
         governor.validate(ConnectDevice(device="CCD Simulator"))
         governor.require_autonomy_level("advisory")
         after = {
             name: hashlib.sha256((config_dir / name).read_bytes()).hexdigest()
-            for name in CONFIGURATION_FILENAMES
+            for name in present
         }
         assert before == after
+        # The overrides were read, not ignored: otherwise this proves nothing
+        # about the files that actually carry the operator's values.
+        assert config.sources.safety.is_layered
+        assert config.equipment.site.name == "Elsewhere"
 
     def test_the_loader_opens_configuration_read_only(self) -> None:
         from nocturne.schemas import loader

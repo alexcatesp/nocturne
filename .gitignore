@@ -22,3 +22,10 @@ data/
 *.db-wal
 *.db-shm
 *.log
+
+# Per-site configuration. The shipped config/*.yaml files are placeholders and
+# are never edited; the operator's real values live beside them in *.local.yaml,
+# which git must never see — they hold the site coordinates, and the whole point
+# is that a pull does not collide with them (ADR 0013).
+config/*.local.yaml
+!config/*.local.yaml.example

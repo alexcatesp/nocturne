@@ -818,3 +818,74 @@ finds out, and it is a different question from what the interface *is*.
 `Ekos.start` was called once, on a profile chosen for having no hardware behind
 it. No module was exercised. The XML says what the modules offer; nothing here
 says what any of them does.
+
+---
+---
+
+# Field Notes — M1, part five: after M1
+
+**Reported by the operator, 2026-08-08.** Same standing as the rest: evidence.
+This one is a defect in what the software asks a person to do, which is why no
+test found it and no test could have.
+
+---
+
+## 27. The config file you must edit is the file git manages
+
+> "config/equipment.yaml is version-controlled, and it is also the file I must
+> edit with my real coordinates. Every git pull now collides with my local edit."
+
+Both halves were deliberate and each is right on its own:
+
+- The file is tracked so its shipped values can be **asserted** —
+  `test_config_safety.py` checks the shipped safety limits against SPEC §5.2.
+- It ships a **placeholder** site rather than real coordinates, because the
+  previous version put a home address to within metres in a public repository
+  next to a description of expensive equipment left outside at night.
+
+Together they guarantee the file is wrong for every user, so every user must
+edit it, so every user collides on every update. The rig is where this lands:
+`git pull` on the Pi is how the rig gets a fix, and it is exactly the operation
+the edit breaks.
+
+It is not only the coordinates. `mount.port` is one cable's `by-id` path;
+`limits.meridian.*` is measured on one tripod, tube and camera; `autonomy_level`
+is how much the operator currently trusts the thing.
+
+**Fixed by ADR 0013:** the shipped file stays tracked and stays a placeholder,
+and an untracked `*.local.yaml` beside it is merged over it at load time.
+`check-config` prints every value the local file set beside the shipped value it
+displaced — because a configuration assembled from two files is one where "I
+changed that" and "the change took effect" are different statements, and a
+misspelled key merges cleanly, changes nothing, and looks exactly like one that
+worked.
+
+`safety.yaml` is layered too. That is the file where a careless merge does the
+most damage, and it is also the file the operator must edit after calibrating.
+The three things that make it safe are unchanged: nothing in Nocturne can write
+it, every override is printed, and the default is still refusal.
+
+## 28. Writing this fix broke the rule it was enforcing
+
+The first version of the test for §27 wrote `safety.local.yaml` and
+`equipment.local.yaml` into the repository's own `config/` — because the shared
+`config_dir` fixture hands out the **real** directory, and a `.local.yaml` is a
+file that directory does not contain, so it looks like nobody's.
+
+Two consequences, and the second is the one that matters:
+
+1. It changed the shipped safety margin from 5 to 6 under another test's feet.
+   `test_config_safety.py` went red, which is how it was found.
+2. **On the rig, it would have left a file overriding the operator's own
+   meridian limits** — written by the test suite, invisible to git, and
+   silently in force.
+
+`test_safety_boundaries.py` has forbidden any module from writing a
+configuration file since M1. Nothing had ever said the same about the tests,
+which are the other thing that runs in that directory. A session-scoped guard
+now fingerprints `config/` and fails the run if anything changed it; a
+`writable_config_dir` fixture hands out a throwaway copy. The guard was verified
+by pointing a deliberate offender at it and watching the run go red.
+
+The invariant was one line of policy short of complete, and the gap was found by
+walking into it.

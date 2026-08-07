@@ -1,0 +1,33 @@
+# Per-site equipment overrides — copy to `equipment.local.yaml` and edit.
+#
+#     cp config/equipment.local.yaml.example config/equipment.local.yaml
+#
+# `equipment.local.yaml` is gitignored. It survives every `git pull`, is never
+# committed, and never leaves the machine. **Edit this, not equipment.yaml.**
+#
+# Only the values you want to change need to appear. Mappings merge key by key,
+# so setting `site.latitude` leaves everything else in `site` alone. Lists do
+# not merge: giving `filter_wheel.slots` here replaces the whole wheel.
+#
+# `nocturne check-config` prints every value this file sets, beside the shipped
+# value it displaced. If something you wrote here is not in that list, it did
+# not take effect — a misspelled top-level key merges cleanly and does nothing.
+
+site:
+  # YOUR OWN, to four decimal places. Nocturne ships a placeholder and warns
+  # until this is set; nothing else fails, the frames are simply computed for
+  # somewhere else. Positive latitude north, positive longitude east.
+  name: "Home"
+  latitude: 0.0000
+  longitude: 0.0000
+  elevation_m: 0.0
+  timezone: "Europe/Madrid"
+
+# The mount's serial port. Leave it out entirely to let indi_eqmod find the
+# device itself, which is what it does correctly (FIELD-NOTES-M1 section 2.3).
+# Set it only to pin one specific device, and use a /dev/serial/by-id/ path:
+# ttyACM0 is not stable across reboots. A configured port that does not exist
+# at startup is a hard failure, by design — it means a cable moved.
+#
+# mount:
+#   port: "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_XXXXXXXXXXXX-if00"
