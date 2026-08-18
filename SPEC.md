@@ -47,6 +47,8 @@ makes every *control* decision (guiding, focusing, slewing, safety limits).
 - **Not a planetary/lunar capture system.** No SER video, no lucky imaging. Deep-sky only.
 - **Not a replacement for instrument-control software.** KStars/Ekos does that. Nocturne
   orchestrates Ekos; it does not reimplement it.
+- **Not automatic collimation.** The collimation assistant (§10.4) measures and displays;
+  the operator turns the screws. There is no motorised secondary and none is planned.
 - **Not weather-safe.** There is no observatory and no roof. Rain avoidance is the
   operator's responsibility (see §9.4).
 
@@ -242,11 +244,16 @@ optical_trains:
     active: true
     focal_length_mm: 1000        # nominal; overridden by plate solve
     aperture_mm: 200
+    # Secondary minor axis. The collimation assistant (§10.4) predicts the
+    # obstruction disc from it and refuses to run when it is null, which is
+    # what an unobstructed train — a refractor — sets it to.
+    central_obstruction_mm: 58
     corrector: null
   - id: "mpcc"
     active: false
     focal_length_mm: 1000
     aperture_mm: 200
+    central_obstruction_mm: 58
     corrector: "Baader MPCC Mark III"
     backfocus_mm: 55
 
@@ -353,6 +360,53 @@ mount:
   baud: 115200                   # the driver starts at 9600; set before CONNECT
   slew_rate_max_deg_s: 3.0       # deliberately below the mount's 7.5; portable setup
   counterweight_fitted: false
+
+# The collimation assistant — §10.4. Attended only; §9.6 refuses it otherwise.
+#
+# NOT IN THE SHIPPED FILE YET, and neither is central_obstruction_mm above. The
+# schema is extra="forbid", so these keys and their Pydantic models land together
+# with the implementation in M4 (ADR 0017). Adding the YAML ahead of the models
+# would fail validation at startup.
+collimation:
+  star:
+    # Magnitudes, so min is the BRIGHTER bound. Anything in this band gives a
+    # usable donut in well under a second at f/5.
+    min_magnitude: 0.0
+    max_magnitude: 3.0
+    # In addition to the §9.2 altitude floor, never instead of it. A Newtonian's
+    # primary flops with altitude, so a reading taken at 70° does not describe
+    # the tube at 30°: prefer a star near where the first target will be.
+    min_altitude_deg: 30
+    prefer_near_first_target: true
+  defocus:
+    direction: "inward"          # "inward" | "outward"; the donut inverts between them
+    # Steps are DERIVED, not configured: §10.4.1 gives the diameter formula and
+    # focuser.step_size_um closes it. Until that is measured (M2), the assistant
+    # ramps away from focus in `direction` until the donut reaches
+    # min_diameter_px, and reports the steps it used.
+    target_diameter_px: 140
+    min_diameter_px: 60          # below this it reports NoMeasurement, never a number
+    max_diameter_px: 400
+  loop:
+    roi_px: 512
+    binning: 2
+    exposure_target_peak_adu: 9000   # of 16383; auto-tuned within the bounds below
+    exposure_min_s: 0.02
+    exposure_max_s: 2.0
+    min_update_hz: 2.0           # a requirement, not a preference — §10.4.2
+    smoothing_frames: 10         # median over this window; seeing is not miscollimation
+    lost_star_frames: 15         # consecutive misses before the loop stops and says so
+  thresholds:
+    error_good: 0.05             # normalised decentre — §10.4.1
+    error_acceptable: 0.12
+    converged_frames: 20         # sustained below error_good before "converged"
+  screws:
+    # Labels only. The mapping from an on-screen direction to one of these is
+    # MEASURED (§10.4.3) and lives in the database, never in this file: nothing
+    # in nocturne writes configuration (ADR 0013).
+    names: ["A", "B", "C"]
+  history:
+    prompt_after_sessions: 5     # sessions since the last check before the UI asks
 ```
 
 ### 5.2 `safety.yaml`
@@ -601,6 +655,11 @@ Read-only tools (always available):
 
 `get_session_state` · `get_block_summary` · `get_frame_detail` · `get_target_visibility`
 · `get_integration_history` · `get_weather` · `get_catalog_search` · `get_sky_conditions`
+· `get_collimation_status`
+
+`get_collimation_status` returns the last measurement's scalars and its age in sessions
+(§10.4.5). There is no corresponding action tool and there will not be one: collimation
+needs a hand on the telescope, so the agent may observe and remark, never start it.
 
 Action tools (gated by autonomy level, always validated by §9):
 
@@ -741,6 +800,30 @@ system.** There is no observatory; parking does not protect the equipment. There
 An independent process monitors the orchestrator's heartbeat. On loss: stop tracking,
 park, ramp the TEC down, notify. It must not depend on the FastAPI process.
 
+### 9.6 Collimation — the operator is touching the telescope
+
+`COLLIMATE` (§10.4) is the only state in which a person is expected to have both hands on
+the moving instrument. Everything else in §9 protects the equipment from the software;
+this protects the operator from it, and it is enforced in the governor:
+
+1. **While the session is in `COLLIMATE`, the governor refuses every mount command except
+   sidereal tracking.** No slew, no park, no pulse guide, no motion vector, from any
+   source — operator, agent or deterministic trigger. A queued slew does not fire on the
+   way out; leaving the state is an explicit operator action and nothing else resumes.
+2. **Entering `COLLIMATE` is refused unless the autonomy level is `observer` or
+   `advisory`.** Hard failure with an explicit message, never a warning and never a
+   demotion-and-proceed. In `supervised` and `autonomous` there is nobody at the tube by
+   definition, so the state has no meaning; the assistant is not a thing to be run
+   unattended, it is a thing that cannot be.
+3. **The agent has no tool that enters, leaves or drives it.** §8.2 exposes the result
+   and nothing else. This is enforced by the tool surface, not by prompting.
+4. **The one slew the assistant needs — to the chosen star — happens before the state is
+   entered**, as an ordinary slew through `safety.validate()`: altitude floor and ceiling,
+   Sun avoidance, meridian limits, slew rate. The assistant gets no exemption and creates
+   no new pointing path.
+5. Centring during the loop is done by moving the **region of interest in software**, not
+   the mount (§10.4.2).
+
 ---
 
 ## 10. Session workflow
@@ -748,12 +831,17 @@ park, ramp the TEC down, notify. It must not depend on the FastAPI process.
 ### 10.1 State machine
 
 ```
-IDLE → SETUP → COOLING → POLAR_ALIGN → FOCUS_INITIAL → PLAN
+IDLE → SETUP → COOLING → [COLLIMATE] → POLAR_ALIGN → FOCUS_INITIAL → PLAN
      → SLEW → SOLVE_CENTER → FOCUS → GUIDE_CALIBRATE → IMAGING
      ⇄ (REFOCUS | DITHER | MERIDIAN_FLIP | TARGET_CHANGE)
      → CALIBRATION_FRAMES → WARMUP → STACKING → COMPLETE
                                    ↘ ABORTED
 ```
+
+`COLLIMATE` (§10.4) is bracketed because it is optional and operator-entered: it needs
+tracking but not an accurate polar alignment, so it sits early, where the operator is
+already standing at the telescope. It may be re-entered from `PLAN` at any time while
+attended, and it is refused outright in `supervised` and `autonomous` (§9.6).
 
 Every transition is logged with timestamp, trigger source (`operator` | `agent` |
 `deterministic` | `safety`) and rationale.
@@ -797,6 +885,204 @@ judgement call — present the metrics, let the agent or operator decide.**
 Output: calibrated, registered, stacked 32-bit FITS. No stretching, no colour calibration,
 no cosmetics. Those belong on the operator's PC.
 
+### 10.4 Collimation assistant
+
+The 200PDS is a Newtonian on a portable mount. It is transported, assembled, and pointed
+at a different part of the sky every night, and its primary mirror moves in its cell as
+the tube tips. Checking collimation is among the **first things the operator does**, ahead
+of polar alignment and long before the first sub — get it wrong and every frame of the
+night carries the error, and no amount of stacking removes it.
+
+A Cheshire and a laser get the mirrors close, indoors, in the light. What they cannot do
+is confirm the result through the actual imaging train, at the altitude the telescope will
+work at, with the camera that will take the pictures. That is what this assistant is for.
+
+**It measures; the operator turns the screws.** There is no motorised collimation on this
+rig and none is planned, so the assistant closes its loop through a human: Nocturne shows
+the current error, the operator turns a screw, the number moves within a second.
+Everything specified below exists to protect that one second.
+
+#### 10.4.1 Method — the defocused star
+
+A bright star, defocused, images the pupil: a bright disc with the shadow of the secondary
+inside it. Perfect collimation puts the shadow concentric within the disc; miscollimation
+displaces it, and the direction of the displacement is the direction of the error.
+
+Per frame, on the region of interest:
+
+1. Subtract the background, threshold at a fraction of the peak, and take the **outer
+   disc**: its flux-weighted centroid `c_outer` and radius `R_outer`.
+2. Inside it, take the **obstruction**: the connected dark region, its centroid `c_inner`
+   and radius `R_inner`.
+3. The error is the decentre, **normalised by the annulus width**:
+
+   ```
+   error = |c_inner − c_outer| / (R_outer − R_inner)
+   angle = position angle of (c_inner − c_outer), in the displayed image,
+           0° up, increasing clockwise
+   ```
+
+Normalising is what makes the number usable. A raw pixel offset scales with how far the
+operator happened to defocus, so it changes when nothing about the telescope has; the
+normalised value is very nearly invariant to defocus, binning and plate scale, which is
+why the thresholds in §5.1 are dimensionless and survive the OAG and MPCC migrations
+untouched.
+
+The **angle is reported in the displayed image**, not on the sky. The operator is looking
+at a phone, not at a star chart, and the arrow has to point the way the screen does.
+
+The required defocus follows from the geometry rather than from a magic number — the donut
+diameter is the projected aperture at the defocused plane:
+
+```
+diameter_px  =  defocus_mm × 1000 / (f_ratio × pixel_size_um)   [unbinned]
+```
+
+so a 140 px donut on the ASI533MM at f/5 needs ≈ 2.6 mm of defocus, and
+`focuser.step_size_um` converts that to EAF steps. That value is measured in M2; until it
+exists the assistant ramps away from focus, in the configured `defocus.direction`, until
+the donut first exceeds `defocus.min_diameter_px`, and reports the steps it used.
+
+The obstruction is likewise predicted, not assumed: `central_obstruction_mm / aperture_mm`
+gives the expected `R_inner / R_outer` — 0.29 on this tube — and a measured ratio far from
+it means the detector has found something that is not a donut. See §10.4.4.
+
+#### 10.4.2 The loop
+
+The whole value of this feature is latency. A collimation screw is turned in small
+fractions of a turn, and a loop that takes five seconds to answer turns a two-minute job
+into a twenty-minute one, in the cold, in the dark.
+
+- **Region of interest**, `loop.roi_px` square, binned `loop.binning`, centred on the
+  star. Not the full 3008² frame: a 512 px ROI at bin 2 is ~0.1 % of the pixels and that
+  is the entire reason the loop can run at video rate on a Pi.
+- **Exposure auto-tuned** to bring the annulus peak into a band around
+  `exposure_target_peak_adu`, clamped to `[exposure_min_s, exposure_max_s]`. If it cannot
+  reach the band, that is a `NoMeasurement`, not a measurement taken anyway.
+- **Cadence: at least `loop.min_update_hz` sustained, measured end to end** — shutter to
+  pixels on the operator's phone. This is an acceptance criterion (§14, M4), not an
+  aspiration.
+- **Smoothing.** Report the median over `loop.smoothing_frames` together with its spread.
+  Seeing moves the centroid frame to frame and is not miscollimation; a number that
+  twitches invites the operator to chase it. The spread is displayed, because a large one
+  means "wait for the seeing", not "turn something".
+- **Convergence** is declared only after `thresholds.converged_frames` consecutive frames
+  below `error_good`. One good frame is a gust of good seeing.
+- **Recentring** tracks the donut between frames and shifts the ROI to follow it. The
+  mount is not commanded (§9.6). If the star is lost for `loop.lost_star_frames`
+  consecutive frames the loop stops and says so.
+- **Preview** is the ROI through the §11.3 pipeline — small, so it is cheap at video
+  rate. The overlay (arrow, circles, centroids) is drawn client-side from the measurement,
+  never burnt into the JPEG.
+
+**Transport.** Ekos first, per ADR 0001: if the Ekos DBus interface exposes ROI and fast
+readout, drive it. Otherwise the camera properties are written directly through INDI —
+which today is an ungated `SetProperty` path (ADR 0007, issue #1). **That is a hard
+prerequisite: the assistant is not implemented until `SetProperty` is gated**, and its
+writes are then restricted to an allowlist of camera and focuser properties containing no
+mount property at all. A feature whose purpose is to let a person stand next to the
+telescope must not be the thing that reopens an unchecked path to the mount.
+
+#### 10.4.3 Which screw is that arrow?
+
+The arrow points in image coordinates. Which of the three collimation screws corresponds
+to that direction depends on camera rotation, the focuser's clocking, the mirror cell and
+which side of the tube the operator is standing on. Deriving it means modelling all four
+and being wrong about one of them silently.
+
+So it is measured. The assistant asks the operator to turn one named screw a small amount,
+records the displacement vector that results, and repeats for a second screw; two vectors
+determine the mapping and the third screw is inferred. Thereafter the arrow is **labelled
+with the screw name and the direction to turn it**.
+
+The mapping is measurement data, so it lives in **SQLite with a timestamp and an
+`optical_train_id`**, never in `config/` — nothing in Nocturne writes configuration
+(ADR 0013). It is invalidated by a change of optical train, and the UI shows its age so a
+rotated camera cannot quietly keep an old mapping alive.
+
+Until a mapping exists, the arrow is drawn unlabelled. An unlabelled arrow is still the
+whole job; the labels only save the first thirty seconds of trial and error.
+
+#### 10.4.4 What it refuses to measure
+
+**A collimated telescope and a broken detector produce the same picture: a number near
+zero.** This is the failure mode CLAUDE.md §2 is about, in its most dangerous form,
+because here "nothing found" is also the desired outcome.
+
+The result type therefore has two shapes and no third:
+
+```
+Measured(error, angle_deg, spread, diameter_px, obstruction_ratio, frames)
+NoMeasurement(reason)
+```
+
+**No code path converts the second into the first with `error = 0`.** The UI renders them
+as different things — a measurement, or an explanation — and a `NoMeasurement` never
+counts toward convergence, is never stored as a check, and never satisfies the history
+prompt of §5.1.
+
+`reason` is a closed vocabulary (ADR 0004): `no_star`, `multiple_stars`, `too_faint`,
+`saturated`, `donut_too_small`, `donut_too_large`, `obstruction_not_found`,
+`obstruction_ratio_implausible`, `star_lost`, `exposure_out_of_range`,
+`unobstructed_train`.
+
+The tests that guard this are positive controls, not absence checks:
+
+- Synthetic donuts with an **injected decentre** of known magnitude and angle, swept
+  across diameter, obstruction ratio, seeing, SNR and background gradient. The measured
+  error must match the injected one within tolerance, and the measured angle within a few
+  degrees.
+- A **concentric** donut must read below `error_good` — asserted only alongside the
+  injected cases, because "reads zero" is meaningless from a detector not simultaneously
+  shown to read non-zero when it should.
+- Every degenerate input — empty field, two stars, a saturated blob, a donut below
+  `min_diameter_px`, an in-focus star, a refractor train — must return the matching
+  `NoMeasurement` reason. Asserting the reason, not merely that it failed.
+
+#### 10.4.5 The measurement record
+
+One record per check, persisted and returned by `get_collimation_status`:
+
+```json
+{
+  "collimation_check_id": 12,
+  "session_id": "2026-08-12",
+  "utc": "2026-08-12T21:41:08Z",
+  "optical_train_id": "native",
+  "star": {"name": "Vega", "magnitude": 0.03},
+  "altitude_deg": 61.2, "azimuth_deg": 104.5,
+  "ambient_temp_c": 18.4, "focuser_temp_c": 17.9,
+  "focuser_position": 24310, "defocus_steps": 1180,
+  "donut_diameter_px": 138, "obstruction_ratio": 0.30,
+  "error": 0.031, "error_spread": 0.008, "angle_deg": 212.4,
+  "frames": 20,
+  "start_error": 0.184, "duration_s": 214,
+  "verdict": "GOOD"
+}
+```
+
+`verdict` is `GOOD` | `ACCEPTABLE` | `POOR` against `thresholds`, computed
+deterministically. **Altitude and azimuth are part of the record because the reading is
+only comparable to another taken near the same place in the sky** — mirror flop is not
+noise, and a history chart that ignores it invents a drift that is not there. The UI plots
+altitude alongside error for exactly this reason.
+
+Nothing here is a per-frame telemetry field: collimation is checked a few times a night at
+most, so it is its own record and does not enlarge §7.2.
+
+#### 10.4.6 What this is not
+
+- **Not a replacement for a Cheshire or a laser.** Those get the mirrors close with the
+  tube horizontal and the lights on. This confirms the result on the sky, through the
+  imaging train, and finds the error the bench tools left behind.
+- **Not automatic.** Nothing turns a screw. See §9.6 for why it also cannot be attempted.
+- **Not a tilt or field-curvature analysis.** Off-axis star shapes carry information about
+  sensor tilt and about the coma-free point, and separating those two from each other is a
+  real problem that this section does not attempt. §15 records it as deferred.
+- **Not applicable to an unobstructed train.** With `central_obstruction_mm: null` there
+  is no shadow to centre; the assistant returns `unobstructed_train` and says so plainly
+  rather than measuring noise.
+
 ---
 
 ## 11. Web application
@@ -828,11 +1114,16 @@ POST   /api/v1/agent/approve/{proposal_id}
 POST   /api/v1/agent/message                       # operator → agent chat
 POST   /api/v1/calibration/flats/assistant
 GET    /api/v1/calibration/library
+POST   /api/v1/collimation/start | /stop           # §10.4; refused unless attended
+GET    /api/v1/collimation/status
+GET    /api/v1/collimation/history?optical_train=
+POST   /api/v1/collimation/screw-calibration       # §10.4.3
 POST   /api/v1/stacking/jobs
 GET    /api/v1/archive?session=&target=&filter=
 
 WS     /ws/telemetry     # frame records, state transitions, events
 WS     /ws/agent         # agent messages, proposals, approvals
+WS     /ws/collimation   # measurement records + ROI preview frames, §10.4.2
 ```
 
 Auth: bearer token, even on LAN. An unauthenticated `POST /abort` is a lost night.
@@ -854,6 +1145,12 @@ Auth: bearer token, even on LAN. An unauthenticated `POST /abort` is a lost nigh
    free-text chat, autonomy control, token budget consumed.
 4. **Archive** — browse by session/target/filter, thumbnails, reject marking, per-file
    download, and **bulk transfer via the Samba path** (not HTTP).
+5. **Collimate** — §10.4. The ROI preview full-bleed, the arrow and circles overlaid, the
+   error large enough to read at arm's length with the phone propped against something,
+   and the history plotted against altitude. Three controls — start, stop, calibrate
+   screws — because the operator has one hand free and is wearing gloves. **Verdict is
+   never carried by colour:** night mode is red on black (§11.5), so there is no green to
+   go good with. A filled bar against threshold marks, and a translated word.
 
 ### 11.5 Night mode
 
@@ -947,7 +1244,11 @@ stacking.
 - **AUTO**: HFD/FWHM/eccentricity measured on synthetic fixtures within 5 % of ground
   truth. Exposure solver produces correct results across a sky-brightness sweep. Flat
   assistant converges within 3 iterations across a 100× brightness range. Four stack
-  variants produced with comparative metrics.
+  variants produced with comparative metrics. **Collimation measurement core (§10.4.1):**
+  injected decentre recovered within 10 % in magnitude and 5° in angle across diameter,
+  obstruction ratio, seeing, SNR and gradient sweeps; a concentric donut reads below
+  `error_good`, asserted in the same suite as the injected cases; every degenerate input
+  returns its specific `NoMeasurement` reason and never a zero error.
 - **HITL**: measured values on real subs agree with Ekos/PixInsight within 10 %.
 
 ### M4 — Web application
@@ -955,7 +1256,15 @@ stacking.
 Full PWA, all four views, i18n, night mode, Samba share.
 
 - **AUTO**: Playwright coverage of all views; API contract tests; i18n completeness.
-- **HITL**: usable one-handed on the phone, on the terrace, at night, in Spanish.
+  **Collimation assistant (§10.4):** end-to-end against the camera simulator sustaining
+  `loop.min_update_hz` shutter-to-client; entering `COLLIMATE` refused in `supervised` and
+  `autonomous`; every mount command except tracking refused while in `COLLIMATE`, proved
+  through each entry point, agent tool surface included; screw mapping stored in SQLite
+  and invalidated by an optical-train change. Prerequisite: `SetProperty` gated (issue #1).
+- **HITL**: usable one-handed on the phone, on the terrace, at night, in Spanish. On the
+  200PDS: a deliberately introduced small miscollimation is detected, the labelled arrow
+  names the screw that corrects it and the direction to turn, and the error returns below
+  `error_good` — with the phone propped at the tube, in the dark, in under five minutes.
 
 ### M5 — Agent, advisory mode
 
@@ -1004,3 +1313,13 @@ Tool surface, event bus, budget guard, decision log.
 - The GPS receiver is re-marked silicon of unknown vendor, not the u-blox NEO-6M its
   label claims. A genuine NEO-M8N is on order; `docs/FIELD-NOTES-TIMING.md` §7 lists what
   carries over and what must be re-measured.
+- Collimation defocus in EAF steps is derived from `focuser.step_size_um` (§10.4.1), which
+  is measured in M2. Until then the assistant ramps to the donut diameter empirically.
+- **Field-wide coma and tilt analysis is deferred.** Star elongation across the frame
+  carries both the displacement of the coma-free point (collimation) and sensor tilt, and
+  the two are not cleanly separable from a single frame. It would run passively on every
+  sub at no extra cost in observing time, which makes it attractive; it is out of §10.4
+  because a metric that cannot say which of two causes it saw would be read as if it
+  could. Revisit with real data from M3 onward.
+- Whether KStars 3.8.3's own collimation aids are reachable over DBus headless is not
+  recorded (ADR 0017, docs/FIELD-NOTES-M1.md §26). Introspect before implementing §10.4.
