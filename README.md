@@ -10,12 +10,24 @@ guiding, focusing, slewing, and safety limits.
 The agent never touches hardware and never sees pixels. It reads scalar telemetry and
 calls a constrained tool API, every call validated by a non-bypassable safety layer.
 
-> ⚠️ **Status: pre-alpha.** Milestone M1 (instrument control) passes its automated
-> criteria against the INDI simulators; the hardware test on the real rig is still
-> outstanding — see [`docs/hardware-setup.md`](docs/hardware-setup.md). Nothing
-> beyond M1 exists yet: no plate solving, no guiding, no telemetry, no web app, no
-> agent. This software moves a telescope. Do not run it unattended until you have
-> completed the meridian calibration procedure for your own mount and tripod.
+> ⚠️ **Status: pre-alpha.** Milestone M1 (instrument control) is **complete**, on real
+> hardware as well as against the INDI simulators. All five devices connect, and the
+> Wave 150i runs on direct USB serial with no SynScan bridge — the M1 hardware test
+> passed, so the WiFi fallback is not taken ([ADR 0011](docs/decisions/0011-m1-mount-link-verified.md)).
+> What was learned doing it is in [`docs/FIELD-NOTES-M1.md`](docs/FIELD-NOTES-M1.md).
+>
+> **Nothing beyond M1 exists yet**: no plate solving, no guiding, no telemetry, no
+> stacking, no web app, no agent. A GPS/PPS receiver and environmental sensors are
+> fitted and verified but no code reads them
+> ([`docs/FIELD-NOTES-TIMING.md`](docs/FIELD-NOTES-TIMING.md)).
+>
+> One M1 limitation is worth stating here: **a raw INDI property write is not yet gated
+> by the safety layer**, so it can still slew the mount
+> ([ADR 0007](docs/decisions/0007-m1-pointing-is-ungated.md), issue #1). The pointing
+> limits land in M2 and three tests are red on purpose until they do.
+>
+> This software moves a telescope. Do not run it unattended until you have completed the
+> meridian calibration procedure for your own mount and tripod.
 
 ---
 

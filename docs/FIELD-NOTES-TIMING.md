@@ -41,11 +41,14 @@ Everything below was executed on the reference rig unless explicitly marked as p
 > backend reserves the enum today. §6.2 is therefore a requirement on code not yet
 > written, not a description of code that exists.
 >
-> **4. The three scripts in §5 are not in this repository.** `sensors_monitor.py`,
-> `gps_monitor.py` and `uart_scan.py` were delivered to the rig and are referenced
-> throughout, including in the appendix's verification commands. They are operator
-> diagnostics rather than backend components, and filing them is a separate decision from
-> filing this document.
+> **4. The three scripts in §5 are not in this repository, and are not going to be.**
+> `sensors_monitor.py`, `gps_monitor.py` and `uart_scan.py` were delivered to the rig and
+> are referenced throughout, including in the appendix's verification commands. They are
+> bring-up diagnostics — they exist to prove the sensors and the receiver work, which they
+> did. The operator's decision is to leave them on the rig and write whatever the backend
+> actually needs when M3/M6 gets there, rather than tracking a tool that would then have
+> two versions. **Commands in this document that invoke them will not run from a fresh
+> clone.**
 
 ---
 
@@ -369,8 +372,8 @@ end, where quantisation on the VEML7700 reaches 1.2 % at 0.3 lux.
 ## 5. Scripts
 
 Delivered, syntax-checked, and validated against real captured data. They are operator
-diagnostics, not backend components. **They are not in this repository** — see the
-repository note at the top.
+diagnostics, not backend components. **They are not in this repository and will not be**
+— see repository note 4 at the top.
 
 | Script | Purpose |
 |---|---|
