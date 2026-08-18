@@ -70,6 +70,12 @@ class TestShippedFile:
         what a broken check does. This runs the same predicate over a file that
         does contain the coordinates, and requires every fragment to be caught.
         """
+        assert len(self.LEAKED_COORDINATES) >= 3, (
+            "the fragment list is empty or short, so every leak check built on "
+            "it compares nothing against nothing and passes. That mutation was "
+            "measured: emptying this tuple left all 81 tests in this file green "
+            "while neither leak check enforced anything."
+        )
         leaked_file = "site:\n  latitude: 41.5806\n  longitude: -4.5814\n"
         caught = [fragment for fragment in self.LEAKED_COORDINATES if fragment in leaked_file]
         assert sorted(caught) == sorted(self.LEAKED_COORDINATES)
@@ -552,3 +558,154 @@ class TestTheDriverIsAuthoritativeForItsOwnLimits:
         """
         camera = load_equipment_config(config_dir / "equipment.yaml").imaging_camera
         assert camera.bit_depth == 14
+
+
+#: The one tracked file allowed to contain the fragments: this one, which must
+#: name them to search for them. Asserted to exist, so a rename cannot quietly
+#: turn the exclusion into a hole.
+LEAK_SCAN_EXEMPT = ("backend/tests/unit/test_config_equipment.py",)
+
+#: Files that are certainly tracked. If the scan cannot see these it is not
+#: looking at the repository, and a clean result means nothing.
+KNOWN_TRACKED = ("SPEC.md", "config/equipment.yaml", "docs/FIELD-NOTES-TIMING.md")
+
+
+def tracked_text_files(repo_root: Path) -> list[Path]:
+    """Every file git tracks, decoded as text, minus this file.
+
+    ``git ls-files`` rather than a tree walk, for a reason that matters: the
+    operator's real coordinates belong in ``config/equipment.local.yaml``,
+    which is untracked by design (ADR 0013). A walk would find that file on the
+    real rig and fail the suite for doing exactly the right thing. What this
+    invariant is about is what the repository *publishes*, which is what git
+    tracks and nothing else — so a file must be ``git add``-ed before this check
+    can see it, which is the same moment it becomes something the repository
+    would publish.
+
+    Raises rather than returning an empty or partial list. The test below passes
+    by finding nothing, and a scan that found nothing because it is broken looks
+    identical to a clean tree.
+    """
+    import subprocess
+
+    try:
+        listing = subprocess.run(
+            ["git", "ls-files", "-z"],
+            cwd=repo_root,
+            capture_output=True,
+            check=True,
+            text=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as error:  # pragma: no cover - CI has git
+        raise AssertionError(
+            f"could not list tracked files in {repo_root}: {error}. This check "
+            "cannot run, and it must not pass by default — it is the only thing "
+            "standing between a documentation edit and publishing a home address."
+        ) from None
+
+    names = [name for name in listing.split("\0") if name]
+    if not names:
+        raise AssertionError(
+            f"git tracks no files under {repo_root}. The leak scan is looking in "
+            "the wrong place and is enforcing nothing."
+        )
+    missing = [name for name in KNOWN_TRACKED if name not in names]
+    if missing:
+        raise AssertionError(
+            f"the leak scan did not see {missing}, which certainly exist. It is "
+            "not looking at this repository."
+        )
+    for exempt in LEAK_SCAN_EXEMPT:
+        if exempt not in names:
+            raise AssertionError(
+                f"{exempt} is exempt from the leak scan but is not tracked. A "
+                "rename has turned the exemption into an unchecked path."
+            )
+
+    files = []
+    for name in names:
+        if name in LEAK_SCAN_EXEMPT:
+            continue
+        path = repo_root / name
+        try:
+            path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue  # binary or absent; nothing to read a coordinate out of
+        files.append(path)
+    if len(files) < 20:
+        raise AssertionError(
+            f"the leak scan decoded only {len(files)} text files. Something is "
+            "rejecting files it should be reading."
+        )
+    return files
+
+
+class TestNoSiteCoordinatesAnywhereInTheRepository:
+    """SPEC section 2.3, widened from the shipped config to everything published.
+
+    ``TestShippedFile`` checks ``equipment.yaml``, because that is where the
+    coordinates once were. But the rule is about the repository, not about one
+    file, and a home address reaches a public repository through whichever file
+    someone happens to be editing — the case that prompted this was a hardware
+    document quoting a GPS fix to six decimal places, which no check on
+    ``equipment.yaml`` would ever have seen.
+
+    A measured position is not an exemption. It is the same address.
+    """
+
+    def test_no_tracked_file_contains_the_reference_site(self, repo_root: Path) -> None:
+        offenders: list[str] = []
+        for path in tracked_text_files(repo_root):
+            text = path.read_text(encoding="utf-8")
+            for leaked in TestShippedFile.LEAKED_COORDINATES:
+                if leaked in text:
+                    offenders.append(f"{path.relative_to(repo_root)}: {leaked}")
+        assert not offenders, (
+            "a real observing site's coordinates are in tracked files: "
+            f"{offenders}. SPEC section 2.3 keeps them out of this repository; "
+            "they belong in an untracked config/*.local.yaml."
+        )
+
+    def test_the_scan_reads_the_repository(self, repo_root: Path) -> None:
+        """The single point of failure for the test above."""
+        found = tracked_text_files(repo_root)
+        names = {path.relative_to(repo_root).as_posix() for path in found}
+        assert len(found) > 20, found
+        assert names >= set(KNOWN_TRACKED)
+        assert not names & set(LEAK_SCAN_EXEMPT)
+
+    def test_the_scan_refuses_to_look_in_the_wrong_place(self, tmp_path: Path) -> None:
+        """An empty scan must raise, not return nothing and let the check pass."""
+        with pytest.raises(AssertionError, match=r"tracks no files|could not list"):
+            tracked_text_files(tmp_path)
+
+    def test_the_scan_would_catch_a_leak_in_a_document(self, repo_root: Path) -> None:
+        """Positive control — CLAUDE.md section 2.
+
+        The check above passes by finding nothing. This runs the same predicate
+        over the text that prompted it — a GPS fix in a hardware note, not a
+        configuration file — and requires every fragment to be caught.
+        """
+        offending_document = (
+            "## 6.1 Site coordinates are wrong\n\n"
+            "`config/equipment.yaml` currently declares:\n\n"
+            "    latitude: 41.5806\n    longitude: -4.5814\n\n"
+            "A GPS fix at the site gave 41.590131 / -4.5814 — 1.18 km away.\n"
+        )
+        assert len(TestShippedFile.LEAKED_COORDINATES) >= 3, (
+            "the fragment list is empty or short; this control and the scan it "
+            "guards both pass by comparing nothing against nothing."
+        )
+        caught = [
+            fragment
+            for fragment in TestShippedFile.LEAKED_COORDINATES
+            if fragment in offending_document
+        ]
+        assert sorted(caught) == sorted(TestShippedFile.LEAKED_COORDINATES)
+
+    def test_the_scan_does_not_fire_on_an_innocent_document(self, repo_root: Path) -> None:
+        """A detector that fires on everything is as useless as one that never does."""
+        innocent = repo_root / "docs" / "timing-setup.md"
+        text = innocent.read_text(encoding="utf-8")
+        assert "PPS" in text, "the file was not read; this test proves nothing"
+        assert not [f for f in TestShippedFile.LEAKED_COORDINATES if f in text]
