@@ -22,4 +22,6 @@ listed in SPEC.md section 4.
 | [0011](0011-m1-mount-link-verified.md) | The Wave 150i runs on direct USB serial; the WiFi fallback is not taken | Accepted |
 | [0012](0012-driver-reported-limits.md) | Which of the driver and the configuration is authoritative, per value | Accepted |
 | [0013](0013-local-configuration-overrides.md) | Shipped configuration, and an untracked local override beside it | Accepted |
+| [0014](0014-chrony-seccomp-disabled.md) | chrony's seccomp filter is disabled so it can read the PPS reference clock | Accepted |
+| [0015](0015-gpsd-read-only-and-tx-unconnected.md) | Nothing writes to the GPS receiver: gpsd read-only, and the Pi's TX left unwired | Accepted |
 | [0016](0016-addendum-a-placement.md) | Addendum A ships as its own document and merges into SPEC.md before M3 | Accepted |

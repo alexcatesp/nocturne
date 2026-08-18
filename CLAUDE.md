@@ -194,6 +194,16 @@ mypy --strict, shellcheck, pytest against real simulator drivers).
 
 **Outstanding for M1.** Nothing.
 
+**Fitted since, and read by nothing yet.** A GPS receiver with a 1 Hz PPS output and an
+AHT20 + BMP280 pair are on the Pi and verified: chrony selects PPS as its reference at
+±155 ns, and the two environmental parts report on I²C. Recorded in
+[`docs/FIELD-NOTES-TIMING.md`](docs/FIELD-NOTES-TIMING.md), with the operator procedure in
+`docs/timing-setup.md` and two decisions in ADR 0014 (chrony's seccomp filter blocks the
+PPS ioctls, silently) and ADR 0015 (nothing writes to the receiver — gpsd read-only, and
+the Pi's TX left unwired). **No code reads any of it**, and adding that is M3/M6 work, not
+now. GPIO4, GPIO18 and the I²C pins are reserved (SPEC §2.2); GPIO18 in particular is held
+for the dew heater and must not be reassigned.
+
 **SPEC.md has an addendum and it is authoritative.**
 [`docs/SPEC-ADDENDUM-A.md`](docs/SPEC-ADDENDUM-A.md) — scientific characterisation and
 data provenance — merges into SPEC.md as §16–§18 before M3 (ADR 0016). Read it before

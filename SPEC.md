@@ -101,6 +101,20 @@ configuration values, never constants. See `equipment.yaml` in §5.
 | Secondary dew heater + PWM | **Required for M6** | Blocking for unattended operation (§9.3) |
 | Flat panel | Owned (light table) | Manual placement, not telescope-mounted |
 | Counterweight | Owned, not mounted | |
+| GPS receiver + PPS | **Fitted, verified** | 1 Hz pulse into GPIO4; disciplines the clock to ±155 ns (Addendum A §A.8.4) |
+| AHT20 (T / RH) | **Fitted, verified** | I²C `0x38`. The authoritative air temperature and humidity — dew point derives from these (§9.3) |
+| BMP280 (P) | **Fitted, verified** | I²C `0x77`. **Pressure only** — it self-heats and reads ~1 °C high |
+
+Everything in the lower three rows was brought up in August 2026 and is recorded in
+[`docs/FIELD-NOTES-TIMING.md`](docs/FIELD-NOTES-TIMING.md), with two decisions it forced
+in ADR 0014 and ADR 0015. Neither subsystem is used by any code yet.
+
+**GPIO and I²C allocations are reserved, not incidental.** GPIO4 carries PPS specifically
+so that **GPIO18/PWM0 stays free for the secondary dew heater**; GPIO2/GPIO3 are the I²C
+bus; GPIO14 (UART TX) is **deliberately left unconnected** so that nothing on the Pi can
+write to the receiver (ADR 0015). Do not reassign any of them. The GPS is on
+`/dev/ttyAMA0` and never `/dev/serial0`, which on the Pi 5 is the debug UART on the 3-pin
+header rather than the GPIO header.
 
 ### 2.3 Observing site
 
@@ -113,7 +127,18 @@ four decimal places is a home address to within metres, and this document sits b
 inventory of equipment left outside overnight and a schedule of when nobody is watching
 it. `equipment.yaml` ships a generic placeholder; the operator supplies the real values
 in an untracked `equipment.local.yaml` (ADR 0013), and Nocturne warns at every startup
-until they do.
+until they do. **A GPS receiver is not an exemption from this rule** — a measured position
+is filed the same way as a position read off a map, and no document in this repository
+reproduces it.
+
+**How to obtain them, since a wrong value here fails silently.** A single GPS fix is not
+good enough: the one taken on the reference rig had HDOP 2.51 and landed 1.18 km from the
+coordinates then configured, of which the longitude component alone was 1.5 s of local
+sidereal time — 22″ of RA. Use a multi-hour average taken at the position the mount
+actually occupies. **Elevation is metres above the geoid, not above the ellipsoid**; INDI
+and KStars expect the former, at this site the two differ by 51.7 m, and confusing them
+produces no error anywhere. See [`docs/FIELD-NOTES-TIMING.md`](docs/FIELD-NOTES-TIMING.md)
+§6.1, and §5 there for why an averaging tool's reported standard error is a lower bound.
 
 **Critical constraint:** no tripod extension is fitted. The OTA will physically collide
 with the tripod legs near the meridian. This is a hard safety concern, not a preference.
@@ -677,6 +702,24 @@ PWM is fitted.** The implementation must:
 
 - Refuse `autonomous` mode if no dew heater device is present in config
 - Modulate PWM from ambient temperature and dew point (weather API or local sensor)
+
+**The local sensor now exists, and it is the preferred source.** An AHT20 is fitted
+(§2.2), so dew point can be computed on the rig rather than fetched from a weather API —
+which removes a network dependency from a control path, per design principle 4. Two
+constraints on using it, both measured:
+
+- **Temperature and humidity come from the AHT20, never from the BMP280.** The BMP280
+  self-heats and read +0.96 °C against the AHT20 on the same board. That biases dew point
+  by about a degree, and against a "keep the secondary above dew point" control target it
+  under-heats the mirror in precisely the marginal conditions where the heater matters.
+  Any sensor pair fitted later gets checked the same way — this is a general property of
+  combined pressure/temperature parts, not a defect of this unit.
+- **A CRC failure is a gap, not a value.** The AHT20 has no register map, only command
+  sequences with a CRC8 on every read. A failed CRC means bus corruption; log the gap and
+  propagate nothing.
+
+Outdoors the sensor needs a **radiation shield**. Unshielded in sunlight it measures its
+own solar heating — several degrees, ten times its specification.
 - Detect the dew signature independently: slow monotonic HFD rise **with** rising
   background **and** falling star count, without temperature change → `DEW_SUSPECTED`
 
@@ -950,3 +993,14 @@ Tool surface, event bus, budget guard, decision log.
 - **Merge Addendum A into this document before M3** — as §16–§18 with a revised §14, per
   ADR 0016. Sensor characterisation ceases to be an open item at that point; §A.1 takes it
   over as a hard M3 prerequisite.
+- **Timing has no offline path yet.** PPS marks the instant within a second but does not
+  say *which* second, and that label currently comes from internet NTP. gpsd's
+  shared-memory refclock is the fix and has not been brought up. Not blocking at the home
+  site, which has wired Ethernet; blocking for any deployment without network
+  (`docs/FIELD-NOTES-TIMING.md` §2.9).
+- Environmental sensors are fitted and read by nothing. Adding the AHT20 to
+  `equipment.yaml`, and reading timing state through `chronyc -c tracking` rather than
+  `/dev/pps0` — which is root-only, and the backend stays unprivileged — are M3/M6 work.
+- The GPS receiver is re-marked silicon of unknown vendor, not the u-blox NEO-6M its
+  label claims. A genuine NEO-M8N is on order; `docs/FIELD-NOTES-TIMING.md` §7 lists what
+  carries over and what must be re-measured.
