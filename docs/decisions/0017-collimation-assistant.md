@@ -50,7 +50,7 @@ of Nocturne assumes the instrument is alone.
 Option 4, specified in SPEC §10.4, with option 1 kept as an explicit
 precondition: **introspect the KStars/Ekos collimation aids before implementing,
 and record what is found in the field notes.** If Ekos exposes a usable ROI and
-fast-readout path over DBus, §10.4.2 drives it rather than writing camera
+fast-readout path over DBus, §10.4.3 drives it rather than writing camera
 properties directly.
 
 The measurement is the normalised decentre of the secondary's shadow within the
@@ -61,7 +61,15 @@ not, and it would have to be recalibrated at the OAG and MPCC migrations. The
 normalised value is very nearly invariant to defocus, binning and plate scale, so
 the thresholds in `equipment.yaml` are dimensionless and survive both.
 
-Three consequences of the decision are load-bearing enough to be part of it:
+**The measurement is attributed to one mirror, explicitly.** On axis, the shadow's
+decentre is dominated by tilt of the **primary**, so those are the three bolts the arrow
+names. The secondary's alignment is a bench job with a Cheshire and a **prerequisite** of
+this assistant: a misaligned secondary barely moves an on-axis shadow, it displaces the
+coma-free point towards the field edges, which is precisely where an on-axis measurement
+cannot see. Not saying which mirror would have been the most expensive kind of vagueness
+here — it would have sent the operator to the wrong three screws in the dark.
+
+Four consequences of the decision are load-bearing enough to be part of it:
 
 - **The result type is `Measured | NoMeasurement(reason)`, with no path from the
   second to `error = 0`.** A collimated telescope and a broken detector produce
@@ -73,6 +81,14 @@ Three consequences of the decision are load-bearing enough to be part of it:
 - **`COLLIMATE` freezes the mount** (SPEC §9.6). While in the state the governor
   refuses every mount command except sidereal tracking, from every source. The
   operator's hands are on the tube.
+- **The usable area is the middle of the field, not the field.** Past a few
+  arcminutes off axis the donut carries field aberrations rather than
+  collimation, so the assistant refuses (`star_off_axis`) rather than reporting a
+  number that is real but is not about collimation. This has a consequence for
+  where `COLLIMATE` sits: a mount pointed north by eye drifts a star out of a 5′
+  zone in about three minutes, so the state is enterable both before and after
+  `POLAR_ALIGN`, the drift is measured rather than assumed, and re-centring
+  **ends** the check — the mount does not move while hands are on the tube.
 - **The screw mapping is measured and stored in SQLite, not derived and not
   written to config.** Which screw an on-screen arrow corresponds to depends on
   camera rotation, focuser clocking, the mirror cell and where the operator is
@@ -104,6 +120,10 @@ Three consequences of the decision are load-bearing enough to be part of it:
 - Night mode forces a UI consequence worth recording: with red on black there is
   no green to signal "good", so the verdict is carried by a bar against threshold
   marks and a translated word, never by colour.
+- The secondary's own alignment stays outside the software entirely, and the
+  M4 HITL criterion says so: the acceptance test starts from a secondary already
+  squared with a Cheshire. Detecting *that* the secondary is the problem is
+  bounded to one signal — an on-axis error that no primary adjustment clears.
 - Field-wide coma and tilt analysis (option 3) is **deferred, not rejected** —
   SPEC §15. It costs no observing time and would run passively on every sub; the
   reason to wait is that separating collimation from tilt needs real data from
