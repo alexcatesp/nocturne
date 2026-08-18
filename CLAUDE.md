@@ -194,6 +194,14 @@ mypy --strict, shellcheck, pytest against real simulator drivers).
 
 **Outstanding for M1.** Nothing.
 
+**SPEC.md has an addendum and it is authoritative.**
+[`docs/SPEC-ADDENDUM-A.md`](docs/SPEC-ADDENDUM-A.md) — scientific characterisation and
+data provenance — merges into SPEC.md as §16–§18 before M3 (ADR 0016). Read it before
+designing anything that stores a measurement: it cannot be retrofitted, its §A.7.1 lists
+five SPEC.md defaults it deliberately contradicts, and its §A.5.1 renames a field the
+telemetry record has not yet been written with. It changes nothing in §9 — it says so
+itself — and it is not licence to start M2.
+
 **The Ekos DBus interface is recorded, not guessed** (issue #2, field notes part four).
 `kstars-dbus-interfaces.xml` and `kstars-live-at-rest.xml` are in
 `backend/tests/fixtures/hardware/` with the same standing as the INDI property dumps, and

@@ -21,3 +21,5 @@ listed in SPEC.md section 4.
 | [0010](0010-dual-meridian-enforcement.md) | Meridian limits enforced in the governor *and* in the driver | Accepted — implement in M2 |
 | [0011](0011-m1-mount-link-verified.md) | The Wave 150i runs on direct USB serial; the WiFi fallback is not taken | Accepted |
 | [0012](0012-driver-reported-limits.md) | Which of the driver and the configuration is authoritative, per value | Accepted |
+| [0013](0013-local-configuration-overrides.md) | Shipped configuration, and an untracked local override beside it | Accepted |
+| [0016](0016-addendum-a-placement.md) | Addendum A ships as its own document and merges into SPEC.md before M3 | Accepted |

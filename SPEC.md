@@ -20,6 +20,15 @@ gate deployment, not development.
 When this document is ambiguous or silent, **stop and ask** rather than inventing behaviour.
 Record the resolution in `docs/decisions/` as an ADR (Architecture Decision Record).
 
+**This document has an addendum, and it is authoritative.**
+[`docs/SPEC-ADDENDUM-A.md`](docs/SPEC-ADDENDUM-A.md) — *scientific characterisation and
+data provenance* — specifies what turns pleasing images into publishable measurements. It
+merges into this document as §16–§18 with a revised §14 **before M3**, and until then it
+lives beside it (ADR 0016). Read it before designing anything that stores a measurement:
+§A.0 warns that provenance cannot be retrofitted onto data already collected, and §A.7.1
+lists five defaults specified here that it contradicts on purpose. Where the two disagree,
+the addendum wins on scientific requirements and this document wins on everything else.
+
 ---
 
 ## 1. Goal and scope
@@ -103,7 +112,8 @@ mount is set up and torn down per session; polar alignment is performed each nig
 four decimal places is a home address to within metres, and this document sits beside an
 inventory of equipment left outside overnight and a schedule of when nobody is watching
 it. `equipment.yaml` ships a generic placeholder; the operator supplies the real values
-locally and Nocturne warns at every startup until they do.
+in an untracked `equipment.local.yaml` (ADR 0013), and Nocturne warns at every startup
+until they do.
 
 **Critical constraint:** no tripod extension is fitted. The OTA will physically collide
 with the tripod legs near the meridian. This is a hard safety concern, not a preference.
@@ -937,3 +947,6 @@ Tool surface, event bus, budget guard, decision log.
   4.8 × 3.6 mm sensor at f/5 will require careful prism placement. Not a software problem.
 - MPCC Mark III: adding the `mpcc` optical train requires re-deriving focal length from
   plate solves and invalidating the flat library.
+- **Merge Addendum A into this document before M3** — as §16–§18 with a revised §14, per
+  ADR 0016. Sensor characterisation ceases to be an open item at that point; §A.1 takes it
+  over as a hard M3 prerequisite.
