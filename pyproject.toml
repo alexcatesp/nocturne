@@ -111,8 +111,10 @@ disable_error_code = ["name-defined", "untyped-decorator", "no-any-return", "val
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]
 asyncio_mode = "auto"
-# -rxX prints expected failures in every run, so the deferred safety limits of
-# issue #1 are visible on every CI page rather than buried.
+# -rxX prints expected failures and unexpected passes in every run. The suite
+# carries no xfail today — issue #1's deferred pointing limits were the last of
+# them and they are now enforced — and this is what makes the next one visible
+# on the CI page rather than buried in the dots.
 addopts = "-rxX"
 markers = [
     "indi: integration test that requires the INDI simulator drivers on PATH",

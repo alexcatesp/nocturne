@@ -3,21 +3,30 @@
 Layer 2. Not bypassable. Every command passes through
 ``validate(command) -> Ok | Rejected(reason)``.
 
-**M1 scope.** This module ships the entry point and the enforcement invariant.
-The numeric limits of SPEC sections 9.1 and 9.2 — altitude floor and ceiling,
-sun avoidance, meridian hour angle, TEC ramp, disk floor — land in M2 and are
-registered as rules against the command types they constrain. What is already
-enforced here:
+What is enforced here:
 
 * An :class:`Approval` is the only thing the executor accepts, and only this
   module can mint one. There is no second door (CLAUDE.md invariant 1).
 * A command type that is not in the registry is **rejected**, not passed
-  through. Adding a command in M2 without registering it fails closed.
+  through. Adding a command without registering it fails closed.
 * ``supervised`` and ``autonomous`` are refused while the meridian limits are
   uncalibrated — a hard failure with an explicit message, never a warning and
   never a default-to-permissive (SPEC section 9.1.2, CLAUDE.md invariant 3).
+* Every command that points the instrument is checked against the altitude
+  floor and ceiling, the Sun, and the meridian hour angle
+  (:mod:`nocturne.safety.rules`, SPEC sections 9.1 and 9.2). While the meridian
+  limits are uncalibrated, pointing is refused outright — at every autonomy
+  level, not only the unattended ones (ADR 0019).
 
-The governor never mutates its configuration and exposes no way to do so.
+**Two things the governor is given rather than takes.** The observing site,
+because altitude and hour angle are meaningless without it; and the clock,
+because a decision that cannot be replayed cannot be audited. The clock is read
+**once per decision**, so every rule in one validation sees the same instant.
+
+The governor never mutates its configuration and exposes no way to do so. The
+limits of SPEC section 9.2 that are not about pointing — TEC ramp rate, disk
+floor, the communication watchdog — are properties of running state rather than
+of a command, and belong to the session layer that will hold that state.
 """
 
 from __future__ import annotations
@@ -25,10 +34,15 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Mapping
 from dataclasses import InitVar, dataclass
+from datetime import UTC, datetime
 from typing import Final, final
 
 from nocturne.safety.commands import Command, ConnectDevice, DisconnectDevice, SetProperty
-from nocturne.schemas import AUTONOMY_LEVELS, AutonomyLevel, SafetyConfig
+from nocturne.safety.decisions import Decision as Decision
+from nocturne.safety.decisions import Ok as Ok
+from nocturne.safety.decisions import Rejected as Rejected
+from nocturne.safety.rules import POINTING_RULES, Rule, RuleContext
+from nocturne.schemas import AUTONOMY_LEVELS, AutonomyLevel, SafetyConfig, Site
 
 logger = logging.getLogger("nocturne.safety")
 
@@ -47,38 +61,6 @@ class SafetyViolation(Exception):
     continue: forging an approval, or requesting an autonomy level the rig is
     not calibrated for. Never caught to proceed anyway.
     """
-
-
-class Decision:
-    """Outcome of :meth:`SafetyGovernor.validate`. Either :class:`Ok` or :class:`Rejected`."""
-
-    __slots__ = ()
-
-    def __bool__(self) -> bool:
-        raise NotImplementedError
-
-
-@final
-@dataclass(frozen=True)
-class Ok(Decision):
-    """The command is permitted."""
-
-    command: Command
-
-    def __bool__(self) -> bool:
-        return True
-
-
-@final
-@dataclass(frozen=True)
-class Rejected(Decision):
-    """The command is refused, with the reason and the rule that refused it."""
-
-    reason: str
-    rule: str
-
-    def __bool__(self) -> bool:
-        return False
 
 
 #: Module-private sentinel. Possession of this object is what distinguishes an
@@ -112,17 +94,32 @@ class Approval:
             )
 
 
-#: A rule takes the command and the safety configuration and returns a rejection,
-#: or None if the command is permitted. M2 populates these lists.
-Rule = Callable[[Command, SafetyConfig], Rejected | None]
+#: A clock returns the current instant, timezone-aware. Injected so that every
+#: decision is reproducible from its log line, and so that M3's disciplined time
+#: (docs/FIELD-NOTES-TIMING.md) can replace the system one without touching a
+#: rule.
+Clock = Callable[[], datetime]
+
+
+def _system_clock() -> datetime:
+    """The default clock. The only place in this package that reads the wall clock."""
+    return datetime.now(UTC)
+
 
 #: Every command type the governor knows about, with the rules that constrain it.
 #: A command type absent from this mapping is rejected — adding a command in a
 #: later milestone without deciding which limits apply to it fails closed.
+#:
+#: ``ConnectDevice`` and ``DisconnectDevice`` carry no rules and that is a
+#: decision, not an omission: connecting a driver commands no motion, and what a
+#: driver does on connect is bounded at bring-up by
+#: :class:`~nocturne.executor.mount.MountLink`. ``SetProperty`` carries the
+#: pointing rules, which apply themselves only to the writes that point
+#: (:mod:`nocturne.safety.properties`).
 COMMAND_RULES: Final[Mapping[type[Command], tuple[Rule, ...]]] = {
     ConnectDevice: (),
     DisconnectDevice: (),
-    SetProperty: (),
+    SetProperty: POINTING_RULES,
 }
 
 
@@ -130,13 +127,39 @@ COMMAND_RULES: Final[Mapping[type[Command], tuple[Rule, ...]]] = {
 class SafetyGovernor:
     """Validates every command before it reaches the executor."""
 
-    def __init__(self, config: SafetyConfig) -> None:
+    def __init__(
+        self,
+        config: SafetyConfig,
+        *,
+        site: Site | None = None,
+        clock: Clock = _system_clock,
+    ) -> None:
+        """Build a governor.
+
+        Args:
+            config: the validated ``safety.yaml`` bundle. Never mutated.
+            site: where the instrument stands, from ``equipment.yaml``. Without
+                it — or with the shipped placeholder — **every pointing command
+                is refused**, because altitude and hour angle computed for the
+                wrong place do not fail, they simply point somewhere else. A
+                governor built without a site still validates everything that
+                moves nothing, which is what the M1 bring-up path needs.
+            clock: returns the current instant, timezone-aware. Read once per
+                decision.
+        """
         self._config = config
+        self._site = site
+        self._clock = clock
 
     @property
     def config(self) -> SafetyConfig:
         """The safety configuration. Frozen; there is no setter, by design."""
         return self._config
+
+    @property
+    def site(self) -> Site | None:
+        """Where the instrument stands, or ``None``. Read-only, like the config."""
+        return self._site
 
     @property
     def max_autonomy_level(self) -> AutonomyLevel:
@@ -152,6 +175,9 @@ class SafetyGovernor:
         command; rejection is a value so that callers must handle it.
         """
         rules = COMMAND_RULES.get(type(command))
+        # One clock read per decision: two rules that each asked would disagree
+        # about where the sky is, by however long the first one took.
+        context = RuleContext(config=self._config, site=self._site, when=self._clock())
         if rules is None:
             decision: Decision = Rejected(
                 reason=(
@@ -164,7 +190,7 @@ class SafetyGovernor:
         else:
             decision = Ok(command=command)
             for rule in rules:
-                rejection = rule(command, self._config)
+                rejection = rule(command, context)
                 if rejection is not None:
                     decision = rejection
                     break

@@ -24,6 +24,7 @@ from nocturne.executor import Executor
 from nocturne.safety import (
     Command,
     ConnectDevice,
+    DisconnectDevice,
     Ok,
     Rejected,
     Rule,
@@ -667,6 +668,25 @@ class TestFilterNamesAreNeverReadFromTheDriver:
         ]
 
 
+#: Command types deliberately registered with no rules, and why. Kept out of the
+#: package on purpose: a reason that lived next to the registry could be added in
+#: the same edit that added the gap.
+COMMANDS_THAT_NEED_NO_RULES = {
+    # Connecting a driver commands no motion. What a mount does on connect is
+    # the driver's own behaviour, and it is bounded at bring-up by MountLink
+    # applying the slew-rate ceiling before anything else happens
+    # (docs/FIELD-NOTES-M1.md section 3.2).
+    ConnectDevice: "connecting a driver commands no motion",
+    DisconnectDevice: "disconnecting a driver commands no motion",
+}
+
+
+def COMMAND_RULES_SNAPSHOT() -> dict[type[Command], tuple[Rule, ...]]:  # noqa: N802
+    from nocturne.safety import COMMAND_RULES
+
+    return dict(COMMAND_RULES)
+
+
 class TestRuleEvaluation:
     """The loop M2's limits will run through, exercised now rather than then."""
 
@@ -709,14 +729,47 @@ class TestRuleEvaluation:
         assert isinstance(decision, Rejected)
         assert decision.rule == "first"
 
-    def test_m1_ships_no_rules_and_says_so(self) -> None:
-        """The numeric limits of SPEC 9.1 and 9.2 land in M2. This is the record."""
+    def test_the_pointing_limits_are_registered(self) -> None:
+        """SPEC 9.1 and 9.2, issue #1. This is what closed ADR 0007."""
+        from nocturne.safety import COMMAND_RULES, POINTING_RULES, SetProperty
+
+        assert COMMAND_RULES[SetProperty] == POINTING_RULES
+        assert POINTING_RULES, "the pointing rules are empty, so they constrain nothing"
+
+    def test_a_command_with_no_rules_has_a_stated_reason(self) -> None:
+        """An empty rule tuple is either a decision or an oversight, and they look alike.
+
+        The list of command types that legitimately carry no rules lives here,
+        in the test, with the reason written out. A command type added to the
+        governor with ``()`` and no entry here fails, which is the difference
+        between "we decided this needs no limits" and "we forgot".
+        """
         from nocturne.safety import COMMAND_RULES
 
-        assert all(rules == () for rules in COMMAND_RULES.values()), (
-            "a rule appeared in COMMAND_RULES; update this test and the M1/M2 note "
-            "in nocturne/safety/governor.py"
+        assert COMMAND_RULES, "the registry is empty; this test would prove nothing"
+        unexplained = [
+            command_type.__name__
+            for command_type, rules in COMMAND_RULES.items()
+            if not rules and command_type not in COMMANDS_THAT_NEED_NO_RULES
+        ]
+        assert not unexplained, (
+            f"registered with no rules and no reason: {unexplained}. Either give the "
+            "command its limits, or add it to COMMANDS_THAT_NEED_NO_RULES with why"
         )
+
+    def test_the_reason_list_is_not_a_blanket(self) -> None:
+        """Positive control: a command type nobody reasoned about must be caught."""
+
+        class Undecided(Command):
+            pass
+
+        registry = dict(COMMAND_RULES_SNAPSHOT()) | {Undecided: ()}
+        unexplained = [
+            command_type.__name__
+            for command_type, rules in registry.items()
+            if not rules and command_type not in COMMANDS_THAT_NEED_NO_RULES
+        ]
+        assert unexplained == ["Undecided"]
 
 
 class TestDecisionContract:
