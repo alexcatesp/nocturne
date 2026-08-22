@@ -231,11 +231,14 @@ the meridian calibration in
 near the meridian with a 200PDS and no tripod extension is the collision this
 project is most concerned about.
 
-> ⚠️ Until M2 lands, Nocturne does not enforce altitude, meridian or Sun limits
-> on a pointing command (see
-> [ADR 0007](decisions/0007-m1-pointing-is-ungated.md) and issue #1). **Do not
-> point the rig at the sky under Nocturne's control yet.** Stage two is done by
-> hand through Ekos, not through Nocturne.
+> ⚠️ Nocturne now enforces the altitude, Sun and meridian limits on every
+> pointing command — and while the meridian limits are uncalibrated it enforces
+> them by **refusing every slew** (ADR 0019). So stage two under Nocturne's
+> control needs two things first: your real site coordinates in
+> `config/equipment.local.yaml`, and the procedure in
+> [`meridian-calibration.md`](meridian-calibration.md) completed, with the
+> measured limits in `config/safety.local.yaml`. Until both are done, stage two
+> is done by hand through Ekos.
 
 ---
 

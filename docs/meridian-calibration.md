@@ -15,10 +15,15 @@ limits:
     calibrated: false
 ```
 
-and refuses `supervised` and `autonomous` autonomy. That refusal is a hard
-failure with an explicit message, not a warning you can click past. `observer`
-and `advisory` still work, so you can plan and image attended while you get
-round to this.
+and **refuses to point the telescope at all** until you have done this. Not
+just unattended: every slew, in every mode, is rejected with a message pointing
+back at this page (ADR 0019). Planning, cooling, filters, focus and parking all
+work — anything that moves the tube does not.
+
+That is deliberate. With no measured limits there is no number to enforce, and
+a rule invented to fill the gap would read like protection while being a guess
+about your tripod. So the software refuses rather than guesses, and this
+procedure is the thing that turns it on.
 
 ---
 
@@ -107,7 +112,14 @@ is a limit that can be got wrong.
 
 ## Recording the result
 
-Edit `config/safety.yaml`:
+Your measurements go in `config/safety.local.yaml` — **not** in
+`config/safety.yaml`. The shipped file is the one git manages; an edit there
+collides with every update and can be pushed to a public repository. The local
+file is untracked, survives every pull, and never leaves this machine
+(ADR 0013). Copy `config/safety.local.yaml.example` if you do not have one yet.
+
+You only write the keys you are changing; everything else comes from the shipped
+file underneath:
 
 ```yaml
 limits:
@@ -117,10 +129,10 @@ limits:
     hour_angle_east_limit_deg: -22.0    # your most restrictive east limit
     hour_angle_west_limit_deg: 18.0     # your most restrictive west limit
     safety_margin_deg: 5                # subtracted from both; raise it if unsure
-    flip_strategy: "flip"
-    flip_settle_s: 30
-    require_solve_after_flip: true
 ```
+
+`calibrated: true` with either limit missing is refused at startup, loudly: the
+four keys are all-or-nothing on purpose.
 
 Then check it loaded:
 

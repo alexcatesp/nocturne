@@ -1053,11 +1053,13 @@ or three minutes Ekos takes, so it is enterable from there too, and the UI recom
 when the measured drift would empty the zone within `loop.drift_warn_minutes`.
 
 **Transport.** Ekos first, per ADR 0001: if the Ekos DBus interface exposes ROI and fast
-readout, drive it. Otherwise the camera properties are written directly through INDI —
-which today is an ungated `SetProperty` path (ADR 0007, issue #1). **That is a hard
-prerequisite: the assistant is not implemented until `SetProperty` is gated**, and its
-writes are then restricted to an allowlist of camera and focuser properties containing no
-mount property at all. A feature whose purpose is to let a person stand next to the
+readout, drive it. Otherwise the camera properties are written directly through INDI. That
+path is now gated for pointing — a `SetProperty` naming a mount coordinate vector is
+checked against §9.1 and §9.2 before it reaches the driver, and one naming an open-loop
+motion vector is refused outright (issue #1, closed in M2). **What remains a hard
+prerequisite is the narrower restriction this assistant needs**: while in `COLLIMATE` its
+writes are confined to an allowlist of camera and focuser properties containing no mount
+property at all. A feature whose purpose is to let a person stand next to the
 telescope must not be the thing that reopens an unchecked path to the mount.
 
 #### 10.4.4 Which screw is that arrow?
@@ -1346,7 +1348,8 @@ Full PWA, all four views, i18n, night mode, Samba share.
   through each entry point, agent tool surface included; screw mapping stored in SQLite
   and invalidated by an optical-train change; a star past `max_offaxis_arcmin` returns
   `star_off_axis` rather than a number, and re-centring ends the check instead of slewing.
-  Prerequisite: `SetProperty` gated (issue #1).
+  Prerequisite: the pointing gate of issue #1 (landed in M2), plus the `COLLIMATE`
+  camera-and-focuser allowlist of §10.4.
 - **HITL**: usable one-handed on the phone, on the terrace, at night, in Spanish. On the
   200PDS, with the secondary already squared with a Cheshire: a deliberately introduced
   small **primary** miscollimation is detected, the labelled arrow names the bolt that

@@ -15,7 +15,7 @@ listed in SPEC.md section 4.
 | [0004](0004-closed-vocabularies.md) | Closed enumerations where the specification lists examples | Accepted |
 | [0005](0005-executor-transport-settings.md) | Executor transport timings without a fourth YAML file | Accepted |
 | [0006](0006-building-from-source.md) | Building INDI, StellarSolver and KStars from source, at pinned refs | Accepted, revised twice |
-| [0007](0007-m1-pointing-is-ungated.md) | M1 leaves pointing ungated, and how that is contained | Accepted (limitation) |
+| [0007](0007-m1-pointing-is-ungated.md) | M1 leaves pointing ungated, and how that is contained | **Closed** — the limits landed in M2 |
 | [0008](0008-raspberry-pi-os-trixie.md) | Raspberry Pi OS Trixie, not Bookworm — KStars 3.8.x is Qt6/KF6 | Accepted |
 | [0009](0009-werror-and-trixie-gcc.md) | INDI's forced `-Werror` is stripped before building on Trixie | Accepted |
 | [0010](0010-dual-meridian-enforcement.md) | Meridian limits enforced in the governor *and* in the driver | Accepted — implement in M2 |
@@ -26,3 +26,5 @@ listed in SPEC.md section 4.
 | [0015](0015-gpsd-read-only-and-tx-unconnected.md) | Nothing writes to the GPS receiver: gpsd read-only, and the Pi's TX left unwired | Accepted |
 | [0016](0016-addendum-a-placement.md) | Addendum A ships as its own document and merges into SPEC.md before M3 | Accepted |
 | [0017](0017-collimation-assistant.md) | A defocused-star collimation assistant; the operator turns the screws | Accepted — implement in M4 |
+| [0018](0018-ephemeris-in-the-safety-path.md) | The safety layer computes its own ephemeris; astropy is a test oracle | Accepted |
+| [0019](0019-no-pointing-while-uncalibrated.md) | Nothing is pointed while the meridian limits are uncalibrated | Accepted |

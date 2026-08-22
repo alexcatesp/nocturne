@@ -1,7 +1,33 @@
 # 0007 — M1 leaves pointing ungated, and how that is contained
 
-Status: Accepted (as a recorded limitation) · 2026-08-05 · Milestone M1
-Tracking: https://github.com/alexcatesp/nocturne/issues/1
+Status: **Closed 2026-08-22** — the limits landed as the first work of M2.
+Originally: Accepted (as a recorded limitation) · 2026-08-05 · Milestone M1
+Tracking: https://github.com/alexcatesp/nocturne/issues/1 (closed)
+
+> **This limitation no longer exists.** `COMMAND_RULES[SetProperty]` now carries
+> the pointing rules of `nocturne/safety/rules.py`, and a write to a coordinate
+> vector is validated against the altitude window, the Sun and the meridian hour
+> angle before it reaches the transport — proved against a real driver in
+> `backend/tests/integration/test_pointing_gate_simulator.py`. While the
+> meridian limits are uncalibrated, every pointing command is refused outright
+> (ADR 0019), which is stricter than the "what closes it" section below
+> anticipated. The `xfail(strict=True)` module this ADR relied on did its job:
+> the altitude case started passing the moment the rules were registered, and
+> the suite went red until the markers were removed on purpose. It has been
+> deleted, and its cases live in `backend/tests/unit/test_safety_pointing.py`
+> as tests that pass.
+>
+> One item of "what closes it" was deliberately not done: **no `SlewTo` command
+> was introduced.** Nothing performs one yet — the typed slew arrives with the
+> mount path that also settles `ON_COORD_SET` and pier side — and a command the
+> executor cannot carry out is a partially implemented branch, which CLAUDE.md
+> §2 forbids. The governor's default-deny is what holds that position: a
+> `SlewTo` added later without rules is rejected, not passed through. The rules
+> are written against a *pointing intent* rather than against `SetProperty`, so
+> binding them to it is one line and a test.
+>
+> The rest of this document is kept as written, because how a known hole was
+> held open safely for a milestone is the part worth being able to re-read.
 
 ## Context
 
