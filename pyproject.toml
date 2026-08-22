@@ -26,6 +26,9 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "hypothesis>=6.100",
+    # The oracle for the ephemeris arithmetic in nocturne/safety/sky.py, and a
+    # test dependency only: the safety path must not import it (ADR 0018).
+    "astropy>=6.0",
     "ruff>=0.5",
     "mypy>=1.10",
     "types-PyYAML",
@@ -85,6 +88,12 @@ disallow_any_unimported = true
 disallow_any_explicit = false  # justified per-use with a comment; see CLAUDE.md section 6
 files = ["backend/nocturne", "backend/tests"]
 mypy_path = "backend"
+
+# astropy is the oracle the ephemeris tests compare against (ADR 0018). It ships
+# no stubs, and it is imported by tests only — never by the package.
+[[tool.mypy.overrides]]
+module = ["astropy.*"]
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["dbus_next.*"]
