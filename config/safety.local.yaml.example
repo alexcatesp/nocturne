@@ -15,10 +15,14 @@
 # first unattended night.
 #
 # Nocturne never writes this file. Not the agent, not the API, not the
-# orchestrator: `meridian.calibrated` becomes true only because a human typed
-# it after performing docs/meridian-calibration.md. That is enforced in code
-# and by a test, and it is the reason this file exists rather than a settings
-# screen.
+# orchestrator. That is enforced in code and by an unconditional test, and it
+# does not change.
+#
+# What did change: the calibration tool measures your meridian limits and
+# writes them to a store of its own, so you no longer have to type them here
+# (ADR 0021). This file keeps the last word over that store — see
+# absolute_hour_angle_bound_deg below — and typing the limits here by hand
+# still works and still wins whenever it is stricter.
 
 # limits:
 #   meridian:
@@ -34,3 +38,13 @@
 #     hour_angle_east_limit_deg: 0.0
 #     # Subtracted from both limits before they are enforced.
 #     safety_margin_deg: 5
+#     # The outer envelope. No measured profile — from the calibration tool or
+#     # anywhere else — may authorise pointing beyond this hour angle, either
+#     # side. It is not a measurement of your tripod: it is what catches a
+#     # limit marked three hours off before it becomes an enforced number.
+#     absolute_hour_angle_bound_deg: 45
+#     # How far the mount may travel before a calibration stops applying. The
+#     # polar axis is tilted to your latitude, so the arc the tube sweeps past
+#     # the legs changes with it: what you measured on the terrace is not valid
+#     # at a dark site 300 km south. 0.5 deg is about 55 km.
+#     latitude_tolerance_deg: 0.5

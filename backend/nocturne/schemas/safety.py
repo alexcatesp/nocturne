@@ -50,6 +50,13 @@ class MeridianLimits(StrictModel):
 
     Hour angle sign convention (SPEC section 7.2): negative east of the
     meridian, positive west of it.
+
+    **Two of these fields are not measurements of the tripod** and are here for
+    what happens around the measurement (ADR 0021). The calibration tool writes
+    measured profiles to a store, not to this file; this file keeps the last
+    word over that store in the only form that survives it — an outer bound no
+    profile may cross, and a tolerance saying how far the rig may travel before
+    a measurement taken elsewhere stops applying.
     """
 
     calibrated: bool
@@ -57,6 +64,20 @@ class MeridianLimits(StrictModel):
     hour_angle_east_limit_deg: Annotated[float, Field(ge=-180.0, lt=0.0)] | None = None
     hour_angle_west_limit_deg: Annotated[float, Field(gt=0.0, le=180.0)] | None = None
     safety_margin_deg: Annotated[float, Field(ge=0.0, le=90.0)]
+
+    #: No measured profile may authorise pointing beyond this hour angle, either
+    #: side. It is a sanity envelope, **not** a property of this tripod: any real
+    #: collision limit sits well inside it, and its job is to catch a limit
+    #: marked at the wrong moment — a button pressed three hours off — before it
+    #: becomes an enforced number.
+    absolute_hour_angle_bound_deg: Annotated[float, Field(gt=0.0, le=180.0)]
+
+    #: How far the site may move before a measured profile stops applying. The
+    #: mount's polar axis is tilted to the latitude, so the arc the tube sweeps
+    #: past the tripod legs is a function of it: a calibration measured at one
+    #: latitude is not valid at another (SPEC section 9.1.7 applies the same
+    #: reasoning to the counterweight).
+    latitude_tolerance_deg: Annotated[float, Field(gt=0.0, le=90.0)]
     flip_strategy: FlipStrategy
     flip_settle_s: Annotated[float, Field(ge=0.0)]
     require_solve_after_flip: bool
@@ -99,6 +120,30 @@ class MeridianLimits(StrictModel):
         return self
 
     @model_validator(mode="after")
+    def _measurements_sit_inside_the_envelope(self) -> Self:
+        for name in ("hour_angle_east_limit_deg", "hour_angle_west_limit_deg"):
+            value = getattr(self, name)
+            if value is not None and abs(value) > self.absolute_hour_angle_bound_deg:
+                raise ValueError(
+                    f"{name} ({value}) lies outside absolute_hour_angle_bound_deg "
+                    f"({self.absolute_hour_angle_bound_deg}); the file contradicts its "
+                    "own bound. Either the measurement is wrong or the bound is, and "
+                    "raising the bound is a deliberate act"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _margin_does_not_swallow_the_envelope(self) -> Self:
+        if self.safety_margin_deg >= self.absolute_hour_angle_bound_deg:
+            raise ValueError(
+                f"safety_margin_deg ({self.safety_margin_deg}) is not smaller than "
+                f"absolute_hour_angle_bound_deg ({self.absolute_hour_angle_bound_deg}); "
+                "the margin would consume the whole envelope and no hour angle could "
+                "ever be permitted"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _margin_does_not_swallow_the_measurement(self) -> Self:
         east = self.hour_angle_east_limit_deg
         west = self.hour_angle_west_limit_deg
@@ -111,6 +156,14 @@ class MeridianLimits(StrictModel):
                 "the usable range"
             )
         return self
+
+    def envelope_hour_angle_limits_deg(self) -> tuple[float, float]:
+        """The outer bound, as a pair. Nothing may be permitted outside it.
+
+        Unlike :meth:`effective_hour_angle_limits_deg` this never raises: the
+        envelope exists precisely for the case where no measurement does.
+        """
+        return (-self.absolute_hour_angle_bound_deg, self.absolute_hour_angle_bound_deg)
 
     def effective_hour_angle_limits_deg(self) -> tuple[float, float]:
         """Enforced limits: the measured values narrowed by the safety margin.

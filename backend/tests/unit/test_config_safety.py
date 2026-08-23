@@ -230,3 +230,81 @@ class TestMeridianCalibrationCoupling:
         calibrated["limits"]["meridian"]["safety_margin_deg"] = 40.0
         with pytest.raises(ValidationError, match="safety_margin_deg"):
             SafetyConfig.model_validate(calibrated)
+
+
+class TestTheAbsoluteEnvelope:
+    """The bound a measured profile may never exceed — SPEC section 9.1, ADR 0021.
+
+    The meridian limits stop being something only a human types into this file:
+    the calibration tool measures them and writes them to a store. The file
+    keeps the last word in the only form that survives that change — an outer
+    bound the store cannot cross, and a tolerance saying how far the rig may
+    travel before a measurement taken somewhere else stops applying.
+    """
+
+    def test_the_shipped_file_carries_both(self, config_dir: Path) -> None:
+        meridian = load_safety_config(config_dir / "safety.yaml").limits.meridian
+        assert meridian.absolute_hour_angle_bound_deg > 0.0
+        assert meridian.latitude_tolerance_deg > 0.0
+
+    def test_the_envelope_is_wider_than_any_limit_this_rig_could_measure(
+        self, config_dir: Path
+    ) -> None:
+        """It is a sanity bound, not a tripod measurement. It must not bind first."""
+        meridian = load_safety_config(config_dir / "safety.yaml").limits.meridian
+        assert meridian.absolute_hour_angle_bound_deg >= 30.0
+
+    def test_the_envelope_reports_itself_as_a_pair(self, config_dir: Path) -> None:
+        meridian = load_safety_config(config_dir / "safety.yaml").limits.meridian
+        bound = meridian.absolute_hour_angle_bound_deg
+        assert meridian.envelope_hour_angle_limits_deg() == (-bound, bound)
+
+    def test_a_measured_limit_outside_the_envelope_is_refused(
+        self, calibrated: dict[str, Any]
+    ) -> None:
+        """The file may not contradict its own bound."""
+        bound = calibrated["limits"]["meridian"]["absolute_hour_angle_bound_deg"]
+        calibrated["limits"]["meridian"]["hour_angle_west_limit_deg"] = bound + 1.0
+        with pytest.raises(ValidationError, match="absolute_hour_angle_bound_deg"):
+            SafetyConfig.model_validate(calibrated)
+
+    def test_an_eastern_limit_outside_the_envelope_is_refused(
+        self, calibrated: dict[str, Any]
+    ) -> None:
+        bound = calibrated["limits"]["meridian"]["absolute_hour_angle_bound_deg"]
+        calibrated["limits"]["meridian"]["hour_angle_east_limit_deg"] = -(bound + 1.0)
+        with pytest.raises(ValidationError, match="absolute_hour_angle_bound_deg"):
+            SafetyConfig.model_validate(calibrated)
+
+    def test_a_margin_that_swallows_the_envelope_is_refused(self, raw: dict[str, Any]) -> None:
+        bound = raw["limits"]["meridian"]["absolute_hour_angle_bound_deg"]
+        raw["limits"]["meridian"]["safety_margin_deg"] = bound
+        with pytest.raises(ValidationError, match="safety_margin_deg"):
+            SafetyConfig.model_validate(raw)
+
+    @pytest.mark.parametrize("value", [0.0, -1.0])
+    def test_a_bound_that_permits_nothing_is_refused(
+        self, raw: dict[str, Any], value: float
+    ) -> None:
+        raw["limits"]["meridian"]["absolute_hour_angle_bound_deg"] = value
+        with pytest.raises(ValidationError):
+            SafetyConfig.model_validate(raw)
+
+    @pytest.mark.parametrize("value", [0.0, -0.5])
+    def test_a_tolerance_that_is_not_positive_is_refused(
+        self, raw: dict[str, Any], value: float
+    ) -> None:
+        """Zero would mean no two GPS fixes ever agree, so nothing is ever calibrated."""
+        raw["limits"]["meridian"]["latitude_tolerance_deg"] = value
+        with pytest.raises(ValidationError):
+            SafetyConfig.model_validate(raw)
+
+    def test_the_tolerance_is_small_enough_to_mean_something(self, config_dir: Path) -> None:
+        """A degree of latitude tilts the polar axis by a degree.
+
+        The shipped safety margin is what absorbs that, so the tolerance has to
+        stay a small fraction of it or a calibration would silently outlive the
+        geometry it was measured against.
+        """
+        meridian = load_safety_config(config_dir / "safety.yaml").limits.meridian
+        assert meridian.latitude_tolerance_deg <= meridian.safety_margin_deg / 5.0
