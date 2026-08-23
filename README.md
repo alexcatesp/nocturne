@@ -17,10 +17,10 @@ calls a constrained tool API, every call validated by a non-bypassable safety la
 > What was learned doing it is in [`docs/FIELD-NOTES-M1.md`](docs/FIELD-NOTES-M1.md).
 >
 > **M2 is under way.** Two slices have landed: the pointing gate, and the mount itself.
-> Nocturne can now slew, park, unpark and stop the mount through Ekos, and every one of
-> those goes through the safety governor before it reaches DBus — including which of the
-> mount module's calls are made at all
-> ([ADR 0022](docs/decisions/0022-the-ekos-mount-module-surface.md)).
+> Nocturne drives the whole Ekos mount interface — slew, sync, go-to-by-name, park,
+> unpark, stop, reset the alignment model, and configure the meridian flip — and every
+> one of those passes the safety governor before it reaches DBus, each bounded by a rule
+> of its own ([ADR 0023](docs/decisions/0023-the-whole-mount-interface-bounded.md)).
 >
 > **The rest of M2 does not exist yet**: no plate solving, no autofocus, no guiding, no
 > sequenced capture, no meridian flip, no session state machine. Nor does anything

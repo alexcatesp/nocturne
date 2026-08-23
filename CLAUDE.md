@@ -176,24 +176,35 @@ Milestone: **M2 in progress.** M1 is complete. Work continues on `main`, which
 carries the merged `m2/ekos-parity` slices.
 
 **The second slice of M2 has landed: the mount moves, through the gate.**
-`Executor.slew`, `.park`, `.unpark` and `.abort_motion` drive the Ekos mount
-module at `/KStars/Ekos/Mount`, and each one is a command object the safety
-governor sees before anything reaches DBus. Four things are worth knowing before
-touching any of it:
+`Executor.slew`, `.sync`, `.slew_to_target`, `.sync_to_target`, `.park`,
+`.unpark`, `.abort_motion`, `.reset_mount_model` and `.set_meridian_flip` drive
+the Ekos mount module at `/KStars/Ekos/Mount` — **all nine methods it exports** —
+and each one is a command object the safety governor sees before anything
+reaches DBus. Five things are worth knowing before touching any of it:
 
-- **The mount module's surface is decided, not open** (ADR 0022). Nocturne calls
-  four of the nine methods it exports and refuses the other five by name, with a
-  reason each. A test asserts the two sets *partition* the interface, so a KStars
-  release that adds a method fails the suite rather than passing unnoticed.
-- **`sync` is among the refused five**, and so is `gotoTarget`. A sync moves the
-  frame every limit is measured in; a target name is resolved inside KStars where
-  the governor never sees a coordinate. Plate-solve syncs arrive with the align
-  module, which is the next slice and has not started.
-- **`slew`'s units came off the KStars source, not from memory.** The
-  introspection XML records two doubles named RA and DEC and nothing about what
-  they mean. Hours versus degrees is a factor of fifteen, so the doxygen comments
-  from the pinned commit are checked in beside the XML as
-  `kstars-mount-dbus-units.txt` and asserted against the bridge's own docstring.
+- **Every call is bounded, and no call is waved through** (ADR 0023, superseding
+  ADR 0022). A test asserts `REQUIRED_MOUNT_METHODS` *equals* the recorded
+  interface, so a KStars release that adds a method fails the suite rather than
+  passing unnoticed. Only `park`, `unpark` and `abort` carry no rules, each for a
+  reason written into the registry's allowlist.
+- **Three commands carry the mount's own state, because the governor must not.**
+  A sync is judged on how far it moves the mount's model, a model reset on
+  whether the mount is parked — and the governor holds no live state and is not
+  going to start. So the executor reads it when it builds the command and the
+  command carries it (`MountReport`, `ResolvedTarget`). The decision stays
+  reproducible from its log line, which is what SPEC §9 asks of it.
+- **A sync is permitted where the identical slew is refused**, deliberately.
+  A sync reports where the instrument *is*; refusing it because the answer is
+  unwelcome leaves the governor measuring against a frame it already knows to be
+  wrong. There is a test asserting exactly that pair, because it is the thing
+  most likely to be "fixed" by someone who has not read ADR 0023.
+- **`setMeridianFlipValues`' argument is misnamed in KStars' own DBus XML.** It
+  is declared `hours`; it is degrees. This repository trusts that XML nearly
+  everywhere and by design, and this is the one place the trust would have been
+  misplaced — by a factor of fifteen, in the direction that flips too late. The
+  proof is in `kstars-mount-dbus-units.txt` and asserted in CI. Related, and
+  equally counter-intuitive: under ADR 0020 the flip offset this rig needs is
+  **negative**, because the keep-out band starts before culmination.
 - **Attaching a module is a wait.** The module objects do not exist until
   `Ekos.start` has run — the two recorded captures are the same process with five
   exported paths and then twenty-four — so `attach_modules()` is separate from
@@ -266,10 +277,19 @@ signature in `fake_kstars.py` — against them. One guess was wrong:
 passed, because the stub shared the misconception. It is now `connect_indiserver()`.
 The module objects **have** since been introspected live, running, and
 `kstars-ekos-running.xml` is the third recording in that directory. The mount
-module is driven (ADR 0022); align, focus, guide and capture are not, and the
-bridge does not name their interfaces — a structural test keeps it that way, so
-each arrives with the commands that use it rather than as a handle somebody
+module is driven in full (ADR 0023); align, focus, guide and capture are not, and
+the bridge does not name their interfaces — a structural test keeps it that way,
+so each arrives with the commands that use it rather than as a handle somebody
 finds.
+
+**One recorded name was still wrong, and the recording is where it shows.**
+`_snake()` — which maps a DBus member to the accessor dbus-next generates —
+inserted an underscore before every capital, where dbus-next keeps runs of
+capitals together. `getObjectDataXML` therefore resolved to an accessor that did
+not exist, and the bridge reported the method missing from a KStars that has it.
+Every member called before that one happened to have no capital run. It is now
+checked against dbus-next's own conversion over every member name in the
+recording, not against an example.
 
 **Known limitations, each with a red test or a tracked issue.** The semantics of
 `RASTATUS.RARunning` are unknown, and a structural test forbids the name appearing in
@@ -288,8 +308,15 @@ also still unimplemented, and until it is, nothing may write the driver's own
 carries no rules: it names no destination, and what happens after it is the watch that
 does not exist yet (ADR 0022).
 
-**Next, and in this order.** The align module — plate solve, centre, and the sync that
-comes with it — then focus, then guide and dithering, then sequenced capture, then the
-flip. The session state machine of SPEC §10.1 is what holds them together and is not
-started. M2's AUTO criterion is a full simulated sequence, so none of it is finished
-until that runs end to end.
+**Next, and in this order.** The align module — plate solve and centre; the sync it
+needs already exists and is bounded — then focus, then guide and dithering, then
+sequenced capture, then the flip. The session state machine of SPEC §10.1 is what holds
+them together and is not started. M2's AUTO criterion is a full simulated sequence, so
+none of it is finished until that runs end to end.
+
+**Two numbers now live in `limits.targeting` and are worth knowing about.**
+`sync_tolerance_deg` bounds how far a plate-solve sync may move the mount's model, and
+`resolver_max_clock_skew_s` bounds how far KStars' simulated clock may be from
+Nocturne's before a position it resolved is refused. The second has a floor of 120 s in
+the schema, because KStars reports its clock quantised to 86.4 s and a check that fires
+when nothing is wrong is a check that gets relaxed until it is not one.
