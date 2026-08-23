@@ -30,3 +30,4 @@ listed in SPEC.md section 4.
 | [0019](0019-no-pointing-while-uncalibrated.md) | Nothing is pointed while the meridian limits are uncalibrated | Accepted |
 | [0020](0020-meridian-limits-are-a-keep-out-band.md) | The meridian limits bracket a keep-out band, not a permitted range | Accepted |
 | [0021](0021-measured-calibrations-live-in-a-store.md) | Measured calibrations live in an append-only store, and nothing writes configuration | Accepted |
+| [0022](0022-the-ekos-mount-module-surface.md) | Which of the Ekos mount module's calls Nocturne makes, and which it refuses | Accepted |

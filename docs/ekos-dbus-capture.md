@@ -323,6 +323,7 @@ ls -la ekos-capture.tar.gz
 | `kstars-dbus-interfaces.xml` | **the essential one** — all nineteen declared interfaces, from the built tree (3d) |
 | `kstars-live-at-rest.xml` | what is actually exported before Ekos starts (3c) |
 | `kstars-ekos-running.xml` | the Ekos modules, if step 4 worked |
+| `kstars-mount-dbus-units.txt` | what the XML cannot say: units, frame, and what the return value means (read from the source, not captured here) |
 | `dbus-names.txt` | whether the bus name is fixed or per-process |
 | `kstars-version.txt` | ties the capture to a build |
 | `kstars.log` | says why, when something did not work |
@@ -331,6 +332,15 @@ The first two answer different questions and are both wanted. The source XML is 
 KStars **declares**; the live introspection is what it **exports at that moment**. A
 method in the first and not the second is not a contradiction — it is an object that has
 not been created yet — but a method in neither is a guess in `ekos.py` that has to go.
+
+**None of them records a unit.** DBus signatures carry types, not meanings, so
+`slew(RA: d, DEC: d)` is as much as introspection will ever say — and whether that
+first double is hours or degrees is a factor of fifteen between the target and
+somewhere else. Where a method's meaning matters and the XML cannot carry it, the
+doxygen comment from the pinned KStars source is checked in beside these captures with
+its commit and its URL. `kstars-mount-dbus-units.txt` is the first, covering the mount
+module; anything later needs the same treatment, taken from the commit
+`scripts/install.sh` actually builds and not from a search result.
 
 They go into `backend/tests/fixtures/hardware/`, alongside the INDI property dumps, and
 get the same standing: recorded from the machine, not written by the author of the code
