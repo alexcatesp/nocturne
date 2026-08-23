@@ -41,7 +41,7 @@ from nocturne.safety.commands import Command, ConnectDevice, DisconnectDevice, S
 from nocturne.safety.decisions import Decision as Decision
 from nocturne.safety.decisions import Ok as Ok
 from nocturne.safety.decisions import Rejected as Rejected
-from nocturne.safety.rules import POINTING_RULES, Rule, RuleContext
+from nocturne.safety.rules import POINTING_RULES, MeasuredBand, Rule, RuleContext
 from nocturne.schemas import AUTONOMY_LEVELS, AutonomyLevel, SafetyConfig, Site
 
 logger = logging.getLogger("nocturne.safety")
@@ -133,6 +133,7 @@ class SafetyGovernor:
         *,
         site: Site | None = None,
         clock: Clock = _system_clock,
+        measured: MeasuredBand | None = None,
     ) -> None:
         """Build a governor.
 
@@ -146,10 +147,16 @@ class SafetyGovernor:
                 moves nothing, which is what the M1 bring-up path needs.
             clock: returns the current instant, timezone-aware. Read once per
                 decision.
+            measured: the meridian calibration measured on this rig, if the
+                store holds one that applies to this site (ADR 0021). Resolved
+                by the caller **once, at startup**, and never re-read per
+                command: a governor is a function of what it was built with, and
+                a limit that can change under a running session is not a limit.
         """
         self._config = config
         self._site = site
         self._clock = clock
+        self._measured = measured
 
     @property
     def config(self) -> SafetyConfig:
@@ -160,6 +167,11 @@ class SafetyGovernor:
     def site(self) -> Site | None:
         """Where the instrument stands, or ``None``. Read-only, like the config."""
         return self._site
+
+    @property
+    def measured_band(self) -> MeasuredBand | None:
+        """The measured meridian calibration in force, if any. Read-only."""
+        return self._measured
 
     @property
     def max_autonomy_level(self) -> AutonomyLevel:
@@ -177,7 +189,12 @@ class SafetyGovernor:
         rules = COMMAND_RULES.get(type(command))
         # One clock read per decision: two rules that each asked would disagree
         # about where the sky is, by however long the first one took.
-        context = RuleContext(config=self._config, site=self._site, when=self._clock())
+        context = RuleContext(
+            config=self._config,
+            site=self._site,
+            when=self._clock(),
+            measured=self._measured,
+        )
         if rules is None:
             decision: Decision = Rejected(
                 reason=(

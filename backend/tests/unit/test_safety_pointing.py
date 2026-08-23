@@ -28,10 +28,13 @@ from hypothesis import strategies as st
 from nocturne.safety import (
     ConnectDevice,
     DisconnectDevice,
+    MeasuredBand,
     Ok,
     Rejected,
+    RuleContext,
     SafetyGovernor,
     SetProperty,
+    enforced_band_deg,
 )
 from nocturne.safety.properties import (
     COORDINATE_PROPERTIES,
@@ -52,6 +55,7 @@ from tests.fixtures.observing import (
     EAST_LIMIT_DEG,
     NIGHT,
     TEST_SITE,
+    WEST_LIMIT_DEG,
     calibrated_safety_config,
     target_at,
 )
@@ -588,3 +592,133 @@ class TestRejectionsSayEnoughToActOn:
         assert isinstance(decision, Rejected)
         assert "25" in decision.reason, decision.reason
         assert "safety.yaml" in decision.reason
+
+
+class TestTheFileAndTheStoreTogether:
+    """Two sources, one band, and the strict one always wins — ADR 0021.
+
+    The measured calibration comes from the store; the hand-typed one from
+    ``safety.yaml``. Under ADR 0020 stricter means *wider*, so combining them
+    can only ever take sky away. That direction is the whole safety argument for
+    letting a database hold a limit at all: it cannot open what the file closed.
+    """
+
+    def measured(self, east: float, west: float) -> MeasuredBand:
+        return MeasuredBand(east_deg=east, west_deg=west, source="test")
+
+    def governor(self, config: SafetyConfig, band: MeasuredBand | None) -> SafetyGovernor:
+        return SafetyGovernor(config, site=TEST_SITE, clock=lambda: NIGHT, measured=band)
+
+    def test_the_store_alone_calibrates_an_otherwise_uncalibrated_file(
+        self, uncalibrated: SafetyConfig
+    ) -> None:
+        """This is the point of the store: the operator never types the numbers."""
+        governor = self.governor(uncalibrated, self.measured(-25.0, 20.0))
+        inside = governor.validate(slew(target_at(0.0, 20.0, NIGHT)))
+        outside = governor.validate(slew(target_at(CLEAR_OF_THE_BAND, 20.0, NIGHT)))
+        assert isinstance(inside, Rejected)
+        assert inside.rule == "meridian"
+        assert isinstance(outside, Ok)
+
+    def test_neither_source_means_nothing_points(self, uncalibrated: SafetyConfig) -> None:
+        decision = self.governor(uncalibrated, None).validate(
+            slew(target_at(CLEAR_OF_THE_BAND, 20.0, NIGHT))
+        )
+        assert isinstance(decision, Rejected)
+        assert decision.rule == "meridian"
+
+    def test_the_wider_store_band_wins_over_the_file(self, calibrated: SafetyConfig) -> None:
+        """The file says -25/+20; a later measurement says the tube needs more room."""
+        margin = calibrated.limits.meridian.safety_margin_deg
+        governor = self.governor(calibrated, self.measured(-40.0, 35.0))
+        band = enforced_band_deg(
+            RuleContext(
+                config=calibrated,
+                site=TEST_SITE,
+                when=NIGHT,
+                measured=self.measured(-40.0, 35.0),
+            )
+        )
+        assert band == (-40.0 - margin, 35.0 + margin)
+        just_inside = governor.validate(slew(target_at(-38.0, 20.0, NIGHT)))
+        assert isinstance(just_inside, Rejected), (
+            "the file's narrower band would have permitted this; the store's wider one must not"
+        )
+
+    def test_the_wider_file_band_wins_over_the_store(self, calibrated: SafetyConfig) -> None:
+        """And the same in the other direction, which is the one that matters.
+
+        A store that could narrow the file's band would be a database quietly
+        opening sky a human closed by hand. It cannot.
+        """
+        margin = calibrated.limits.meridian.safety_margin_deg
+        band = enforced_band_deg(
+            RuleContext(
+                config=calibrated,
+                site=TEST_SITE,
+                when=NIGHT,
+                measured=self.measured(-5.0, 4.0),
+            )
+        )
+        assert band == (EAST_LIMIT_DEG - margin, WEST_LIMIT_DEG + margin)
+
+    def test_the_margin_is_applied_to_the_store_too(self, uncalibrated: SafetyConfig) -> None:
+        """One margin, one place. A measurement is not enforced raw."""
+        margin = uncalibrated.limits.meridian.safety_margin_deg
+        assert margin > 0.0
+        band = enforced_band_deg(
+            RuleContext(
+                config=uncalibrated,
+                site=TEST_SITE,
+                when=NIGHT,
+                measured=self.measured(-25.0, 20.0),
+            )
+        )
+        assert band == (-25.0 - margin, 20.0 + margin)
+
+    @settings(max_examples=200, deadline=None)
+    @given(
+        file_east=st.floats(-60.0, -1.0),
+        file_west=st.floats(1.0, 60.0),
+        store_east=st.floats(-60.0, -1.0),
+        store_west=st.floats(1.0, 60.0),
+    )
+    def test_combining_never_narrows_either_source(
+        self,
+        file_east: float,
+        file_west: float,
+        store_east: float,
+        store_west: float,
+        config_dir: Path,
+    ) -> None:
+        """Property: the combined band contains both. Whatever the numbers."""
+        import copy
+
+        import yaml
+
+        with (config_dir / "safety.yaml").open(encoding="utf-8") as handle:
+            raw = copy.deepcopy(yaml.safe_load(handle))
+        raw["limits"]["meridian"].update(
+            {
+                "calibrated": True,
+                "calibration_date": "2026-08-01",
+                "hour_angle_east_limit_deg": file_east,
+                "hour_angle_west_limit_deg": file_west,
+            }
+        )
+        config = SafetyConfig.model_validate(raw)
+        margin = config.limits.meridian.safety_margin_deg
+        band = enforced_band_deg(
+            RuleContext(
+                config=config,
+                site=TEST_SITE,
+                when=NIGHT,
+                measured=self.measured(store_east, store_west),
+            )
+        )
+        assert band is not None
+        east, west = band
+        assert east <= file_east - margin
+        assert east <= store_east - margin
+        assert west >= file_west + margin
+        assert west >= store_west + margin

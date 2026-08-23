@@ -56,12 +56,34 @@ CONFIG_FILES: Final = "config/safety.yaml (or your config/safety.local.yaml)"
 
 @final
 @dataclass(frozen=True, slots=True)
+class MeasuredBand:
+    """A meridian calibration measured on the rig, as it came off the tool.
+
+    The raw measurement, **before** the safety margin: the margin lives in
+    ``safety.yaml`` and is applied in one place, so that a band from the store
+    and a band typed into the file are widened by the same number.
+
+    ``source`` is for the rejection message and the startup report — an operator
+    reading "no pointing between -30 and +25" is owed the answer to "says who".
+    """
+
+    east_deg: float
+    west_deg: float
+    source: str
+
+
+@final
+@dataclass(frozen=True, slots=True)
 class RuleContext:
     """Everything a rule may consult. Immutable, and built once per decision."""
 
     config: SafetyConfig
     site: Site | None
     when: datetime
+    #: The measured calibration that applies to this rig at this site, if there
+    #: is one (ADR 0021). Resolved once at startup and never per command: the
+    #: governor is a function of what it was built with.
+    measured: MeasuredBand | None = None
 
 
 #: A rule returns a rejection, or ``None`` if it permits the command.
@@ -204,19 +226,21 @@ def enforce_meridian_limits(command: Command, context: RuleContext) -> Rejected 
     if resolved is None:
         return None
     position, site = resolved
-    meridian = context.config.limits.meridian
-    if not meridian.calibrated:
+    band = enforced_band_deg(context)
+    if band is None:
         return Rejected(
             rule="meridian",
             reason=(
                 "the meridian limits for this mount and tripod have not been "
                 "calibrated, so nothing knows at which hour angle the tube reaches a "
-                "tripod leg. Every pointing command is refused until they are. Complete "
-                "the procedure in docs/meridian-calibration.md and record the measured "
-                "limits in config/safety.local.yaml (SPEC section 9.1)"
+                "tripod leg. Every pointing command is refused until they are. Measure "
+                "them with the procedure in docs/meridian-calibration.md — the "
+                "calibration tool records them for you — or type them into "
+                "config/safety.local.yaml (SPEC section 9.1)"
             ),
         )
-    east, west = meridian.effective_hour_angle_limits_deg()
+    east, west = band
+    meridian = context.config.limits.meridian
     angle = hour_angle_deg(position.ra_hours, context.when, site.longitude)
     if east < angle < west:
         return Rejected(
@@ -231,6 +255,33 @@ def enforce_meridian_limits(command: Command, context: RuleContext) -> Rejected 
             ),
         )
     return None
+
+
+def enforced_band_deg(context: RuleContext) -> tuple[float, float] | None:
+    """The hour-angle band the tube may not enter, or ``None`` if uncalibrated.
+
+    Two sources may know the limits: ``safety.yaml``, typed by hand, and a
+    profile measured by the calibration tool and kept in the store (ADR 0021).
+    **Whichever is stricter wins, edge by edge** — and under ADR 0020 stricter
+    means wider, so the band is the union of the two. That direction is what
+    keeps the store from ever opening more sky than the file allows, which is
+    the property CLAUDE.md invariant 2 is about.
+
+    Neither source is a fallback for the other: with neither, there is no band
+    and every pointing command is refused (ADR 0019).
+    """
+    meridian = context.config.limits.meridian
+    margin = meridian.safety_margin_deg
+    candidates: list[tuple[float, float]] = []
+    if meridian.calibrated:
+        candidates.append(meridian.effective_hour_angle_limits_deg())
+    if context.measured is not None:
+        candidates.append(
+            (context.measured.east_deg - margin, context.measured.west_deg + margin)
+        )
+    if not candidates:
+        return None
+    return min(east for east, _ in candidates), max(west for _, west in candidates)
 
 
 #: The rules that constrain a pointing command, in the order they are applied.
@@ -264,12 +315,14 @@ def _resolve(command: Command, context: RuleContext) -> tuple[SkyPosition, Site]
 
 __all__ = [
     "POINTING_RULES",
+    "MeasuredBand",
     "Rule",
     "RuleContext",
     "enforce_altitude_limits",
     "enforce_meridian_limits",
     "enforce_sun_altitude_gate",
     "enforce_sun_avoidance",
+    "enforced_band_deg",
     "refuse_motion_that_cannot_be_validated",
     "require_a_configured_site",
 ]

@@ -43,10 +43,14 @@ MUTATING_TRANSPORT_METHODS = frozenset(
 
 
 #: Modules permitted to write to disk, and only ever for their own output.
-#: M1 grants nothing; the entries are the ones SPEC assigns output to, added as
-#: those milestones land. nocturne.agent, nocturne.api, nocturne.safety and
-#: nocturne.schemas may never appear here — see the test below.
-MODULES_THAT_MAY_WRITE: frozenset[str] = frozenset()
+#: The entries are the ones SPEC assigns output to, added as those milestones
+#: land. nocturne.agent, nocturne.api, nocturne.safety and nocturne.schemas may
+#: never appear here — see the test below.
+#:
+#: nocturne.store writes one file: its own SQLite database, holding the measured
+#: meridian calibration (ADR 0021). It is here rather than in the safety package
+#: precisely so that this line exists and has to be justified.
+MODULES_THAT_MAY_WRITE: frozenset[str] = frozenset({"nocturne.store"})
 
 #: The configuration files. No module may write one, allowlisted or not.
 #: The `.local.yaml` overrides count: `safety.local.yaml` sets the meridian
@@ -65,6 +69,13 @@ CONFIGURATION_FILENAMES = (
 WRITING_METHODS = frozenset(
     {"write_text", "write_bytes", "writelines", "unlink", "rename", "replace", "mkdir"}
 )
+
+#: Opening a SQLite database creates the file. Nothing in the package did that
+#: until the calibration store, and the detector above could not see it: no
+#: write_text, no open(). A module could have kept a database anywhere without
+#: appearing in the allowlist at all.
+DATABASE_OPENING_CALLS = frozenset({"connect"})
+DATABASE_MODULES = frozenset({"sqlite3"})
 
 
 def write_calls(path: Path) -> list[tuple[int, str]]:
@@ -87,6 +98,12 @@ def write_calls_in_source(source: str) -> list[tuple[int, str]]:
         if isinstance(node.func, ast.Attribute):
             if node.func.attr in WRITING_METHODS:
                 found.append((node.lineno, f"{node.func.attr}()"))
+            elif (
+                node.func.attr in DATABASE_OPENING_CALLS
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in DATABASE_MODULES
+            ):
+                found.append((node.lineno, f"{node.func.value.id}.{node.func.attr}()"))
             elif node.func.attr == "open" and _opens_for_writing(node, mode_index=0):
                 # Path("x").open("w") — the mode is the first argument.
                 found.append((node.lineno, "open(...)"))
@@ -98,6 +115,41 @@ def write_calls_in_source(source: str) -> list[tuple[int, str]]:
         ):
             found.append((node.lineno, "open(...)"))
     return found
+
+
+def configuration_filenames_named(source: str) -> list[str]:
+    """Configuration filenames appearing in code — docstrings do not count.
+
+    The rule this feeds is unconditional: a module that writes to disk and names
+    a configuration file is refused. It stayed crude on purpose until a module
+    arrived whose whole job is to keep measurements *out* of the configuration,
+    and which therefore says the filename in its docstring to explain that it
+    does not touch it.
+
+    Prose is not a path. So docstrings are skipped and every other string
+    literal is still scanned — a module with "safety.yaml" anywhere in its
+    actual code is caught exactly as before, and the positive controls below
+    prove both halves.
+    """
+    tree = ast.parse(source)
+    docstrings = {
+        node.body[0].value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
+        and node.body
+        and isinstance(node.body[0], ast.Expr)
+        and isinstance(node.body[0].value, ast.Constant)
+        and isinstance(node.body[0].value.value, str)
+    }
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and node not in docstrings
+        ):
+            found |= {name for name in CONFIGURATION_FILENAMES if name in node.value}
+    return sorted(found)
 
 
 def _opens_for_writing(node: ast.Call, *, mode_index: int) -> bool:
@@ -297,6 +349,15 @@ class TestTheDetectorsActuallyDetect:
         )
         assert write_calls_in_source(innocent) == []
 
+    def test_the_write_detector_sees_a_database_being_opened(self) -> None:
+        """sqlite3.connect() creates a file, and nothing else in the scan says so."""
+        source = 'import sqlite3\ndef go() -> None:\n    sqlite3.connect("/tmp/x.db")\n'
+        assert write_calls_in_source(source)
+
+    def test_the_write_detector_ignores_an_unrelated_connect(self) -> None:
+        source = 'def go() -> None:\n    client.connect("host")\n'
+        assert write_calls_in_source(source) == []
+
     def test_the_write_detector_finds_both_spellings_of_open(self) -> None:
         assert write_calls_in_source('open("f", "w")\n')
         assert write_calls_in_source('Path("f").open("w")\n')
@@ -319,9 +380,17 @@ class TestTheDetectorsActuallyDetect:
         assert mutating_transport_calls(allowed, module="rogue") == []
 
     def test_the_configuration_filename_detector_fires(self) -> None:
-        named = [name for name in CONFIGURATION_FILENAMES if name in OFFENDING_SOURCE]
-        assert named
+        assert configuration_filenames_named(OFFENDING_SOURCE)
         assert write_calls_in_source(OFFENDING_SOURCE)
+
+    def test_the_configuration_filename_detector_reads_code_not_prose(self) -> None:
+        """Both halves: a docstring is not a path, and a path still is one."""
+        prose = '"""This module never writes config/safety.yaml."""\nx = 1\n'
+        assert configuration_filenames_named(prose) == []
+
+        real = 'def sneaky() -> None:\n    Path("config/safety.yaml").write_text("")\n'
+        assert configuration_filenames_named(real) == ["safety.yaml"]
+        assert write_calls_in_source(real)
 
     def test_the_unresolved_property_detector_fires(self) -> None:
         names = TestRARunningIsNotTreatedAsMotion.UNRESOLVED_MOTION_PROPERTIES
@@ -450,7 +519,7 @@ class TestConfigurationIsNotWritable:
         offenders: list[str] = []
         for path in python_sources():
             source = path.read_text(encoding="utf-8")
-            named = [name for name in CONFIGURATION_FILENAMES if name in source]
+            named = configuration_filenames_named(source)
             if named and write_calls(path):
                 offenders.append(f"{module_name(path)} writes and names {named}")
         assert not offenders, "; ".join(offenders)

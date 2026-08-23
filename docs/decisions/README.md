@@ -29,3 +29,4 @@ listed in SPEC.md section 4.
 | [0018](0018-ephemeris-in-the-safety-path.md) | The safety layer computes its own ephemeris; astropy is a test oracle | Accepted |
 | [0019](0019-no-pointing-while-uncalibrated.md) | Nothing is pointed while the meridian limits are uncalibrated | Accepted |
 | [0020](0020-meridian-limits-are-a-keep-out-band.md) | The meridian limits bracket a keep-out band, not a permitted range | Accepted |
+| [0021](0021-measured-calibrations-live-in-a-store.md) | Measured calibrations live in an append-only store, and nothing writes configuration | Accepted |

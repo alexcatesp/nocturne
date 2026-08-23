@@ -24,7 +24,7 @@ from .properties import (
     PointingIntent,
     pointing_intent,
 )
-from .rules import POINTING_RULES, Rule, RuleContext
+from .rules import POINTING_RULES, MeasuredBand, Rule, RuleContext, enforced_band_deg
 
 __all__ = [
     "COMMAND_RULES",
@@ -40,6 +40,7 @@ __all__ = [
     "ConnectDevice",
     "Decision",
     "DisconnectDevice",
+    "MeasuredBand",
     "Ok",
     "PointingIntent",
     "PropertyValue",
@@ -49,5 +50,6 @@ __all__ = [
     "SafetyGovernor",
     "SafetyViolation",
     "SetProperty",
+    "enforced_band_deg",
     "pointing_intent",
 ]
