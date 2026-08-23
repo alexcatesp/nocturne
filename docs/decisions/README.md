@@ -32,3 +32,4 @@ listed in SPEC.md section 4.
 | [0021](0021-measured-calibrations-live-in-a-store.md) | Measured calibrations live in an append-only store, and nothing writes configuration | Accepted |
 | [0022](0022-the-ekos-mount-module-surface.md) | Which of the Ekos mount module's calls Nocturne makes, and which it refuses | **Superseded by 0023** |
 | [0023](0023-the-whole-mount-interface-bounded.md) | The whole mount interface, each call bounded rather than refused | Accepted |
+| [0024](0024-solving-is-a-read.md) | Solving is a read, and what follows it is a command | Accepted |
