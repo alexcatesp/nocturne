@@ -1,7 +1,16 @@
 # 0022 — Which of the Ekos mount module's calls Nocturne makes, and which it refuses
 
-Status: Accepted · 2026-08-23 · Milestone M2
+Status: **Superseded by [ADR 0023](0023-the-whole-mount-interface-bounded.md)**,
+2026-08-23 · Milestone M2
 Affects SPEC §3, §4, §9.1, §9.2, §10.1. Extends ADR 0001, 0019 and 0020.
+
+> **Superseded the same day, by the operator's decision.** The five methods this
+> ADR refused are implemented, each with a rule of its own rather than a
+> refusal — ADR 0023 has the rules and what had to be built to make them
+> checkable. This document is kept because its argument is the one each of those
+> rules had to answer: read in order, the two explain why the rules are what they
+> are rather than looking arbitrary. What survives unchanged is the reasoning for
+> `park`, `unpark` and `abort` carrying no rules at all.
 
 ## Context
 
