@@ -43,9 +43,12 @@ def _format_report(config: NocturneConfig) -> str:
 
     if meridian.calibrated:
         east, west = meridian.effective_hour_angle_limits_deg()
+        # The pair brackets the band the tube may not enter, not the range it
+        # may (ADR 0020). Printing it as a range is how the misreading survived
+        # M1, so this line says what is refused rather than naming two numbers.
         meridian_line = (
             f"  Meridian:      calibrated {meridian.calibration_date}, "
-            f"enforced hour angle {east:+.1f} deg to {west:+.1f} deg"
+            f"no pointing between {east:+.1f} and {west:+.1f} deg of hour angle"
         )
     else:
         meridian_line = (

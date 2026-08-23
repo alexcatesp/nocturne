@@ -21,8 +21,8 @@
 # What did change: the calibration tool measures your meridian limits and
 # writes them to a store of its own, so you no longer have to type them here
 # (ADR 0021). This file keeps the last word over that store — see
-# absolute_hour_angle_bound_deg below — and typing the limits here by hand
-# still works and still wins whenever it is stricter.
+# latitude_tolerance_deg below — and typing the limits here by hand still
+# works and still wins whenever it is stricter.
 
 # limits:
 #   meridian:
@@ -36,13 +36,10 @@
 #     # positive, east negative. Both are required once calibrated is true.
 #     hour_angle_west_limit_deg: 0.0
 #     hour_angle_east_limit_deg: 0.0
-#     # Subtracted from both limits before they are enforced.
+#     # The two limits bracket the band the tube may NOT enter — not the band
+#     # it may. The margin widens that band on both sides before it is
+#     # enforced, so it always costs sky and never lends any (ADR 0020).
 #     safety_margin_deg: 5
-#     # The outer envelope. No measured profile — from the calibration tool or
-#     # anywhere else — may authorise pointing beyond this hour angle, either
-#     # side. It is not a measurement of your tripod: it is what catches a
-#     # limit marked three hours off before it becomes an enforced number.
-#     absolute_hour_angle_bound_deg: 45
 #     # How far the mount may travel before a calibration stops applying. The
 #     # polar axis is tilted to your latitude, so the arc the tube sweeps past
 #     # the legs changes with it: what you measured on the terrace is not valid

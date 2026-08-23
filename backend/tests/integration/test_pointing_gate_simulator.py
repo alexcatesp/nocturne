@@ -58,8 +58,10 @@ SETTINGS = IndiSettings(
 #: Below the 25-degree altitude floor at the test site, at every hour angle.
 FAR_SOUTH_DEC = -60.0
 
-#: Comfortably inside every limit at NIGHT: 5 degrees east of the meridian.
-PERMITTED_HOUR_ANGLE = -5.0
+#: Clear of every limit at NIGHT. The meridian limits bracket a band the tube may
+#: not enter rather than a range it may (ADR 0020), so a permitted target is one
+#: well away from the meridian: the fixture's band is -30 to +25.
+PERMITTED_HOUR_ANGLE = -60.0
 PERMITTED_DEC = 20.0
 
 

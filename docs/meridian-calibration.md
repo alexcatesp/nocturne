@@ -41,8 +41,17 @@ Hour angle is how far the mount has driven past the meridian, in degrees:
 A hard limit at hour angle −20° means: stop, or flip, twenty degrees (eighty
 minutes of tracking) before the meridian.
 
-You will end up with two numbers, and Nocturne narrows both by
-`safety_margin_deg` before enforcing them.
+**The two numbers bracket a band the tube may not enter — not a range it may.**
+That is worth stating outright, because the software got it backwards once
+(ADR 0020). The reason the danger sits at the meridian is the one you gave
+yourself: a Newtonian points steeply when a target culminates, and the end of
+the tube carrying the primary mirror cell swings *down* as it does, towards a
+leg. Culmination is the meridian. So east −20 and west +15 mean **nothing
+between −20 and +15**; everything outside is free sky, which is most of the
+night.
+
+Nocturne then **widens** that band by `safety_margin_deg` before enforcing it.
+The margin always costs sky and never lends any.
 
 ---
 
@@ -128,7 +137,7 @@ limits:
     calibration_date: 2026-08-12        # the day you measured, not today
     hour_angle_east_limit_deg: -22.0    # your most restrictive east limit
     hour_angle_west_limit_deg: 18.0     # your most restrictive west limit
-    safety_margin_deg: 5                # subtracted from both; raise it if unsure
+    safety_margin_deg: 5                # widens the forbidden band; raise it if unsure
 ```
 
 `calibrated: true` with either limit missing is refused at startup, loudly: the
@@ -143,11 +152,11 @@ Then check it loaded:
 The report's last line should read:
 
 ```
-Meridian:      calibrated 2026-08-12, enforced hour angle -17.0 deg to +13.0 deg
+Meridian:      calibrated 2026-08-12, no pointing between -27.0 and +23.0 deg
 ```
 
-Those enforced numbers are your measurements minus the margin. They are what the
-safety governor uses; the raw measurements are never enforced directly
+Those are your measurements widened by the margin. They are what the safety
+governor refuses; the raw measurements are never enforced directly
 (SPEC section 9.1.4).
 
 The configuration will be **refused** if:
@@ -156,8 +165,8 @@ The configuration will be **refused** if:
 - `calibrated: false` with measured values still present — clearing the flag
   invalidates the measurement, so clear the values too;
 - the east limit is not negative or the west limit is not positive;
-- `safety_margin_deg` is as large as either measurement, which would invert the
-  usable range.
+- the margin widens the band so far that it closes the whole circle, leaving no
+  hour angle that could ever be permitted.
 
 ---
 
@@ -168,8 +177,13 @@ The configuration will be **refused** if:
 - The counterweight is fitted or removed. Nocturne treats
   `counterweight_fitted` as invalidating (SPEC section 9.1.7).
 - A different tripod, or a tripod extension. **If you fit an extension, redo
-  this — the limits get wider, and stale narrow limits cost imaging time rather
-  than equipment, but stale wide limits cost equipment.**
+  this — the forbidden band shrinks, and a stale band that is too wide costs
+  imaging time, while one that is too narrow costs equipment.**
+- **You set up at a different latitude.** The polar axis is tilted to it, so the
+  arc the tube sweeps past the legs changes with it. What you measured on the
+  terrace is not valid at a dark site far to the south, and Nocturne now records
+  the latitude a calibration was measured at and stops honouring it beyond
+  `latitude_tolerance_deg`.
 - Anything at all changes about how the rig is assembled and you are not certain.
 
 It takes twenty minutes. The alternative is a 200PDS driving into a tripod leg

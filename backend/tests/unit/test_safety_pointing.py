@@ -52,13 +52,17 @@ from tests.fixtures.observing import (
     EAST_LIMIT_DEG,
     NIGHT,
     TEST_SITE,
-    WEST_LIMIT_DEG,
     calibrated_safety_config,
     target_at,
 )
 
 MOUNT = "EQMod Mount"
 COORDINATES = "EQUATORIAL_EOD_COORD"
+
+#: An hour angle well east of the forbidden band, at a declination that keeps it
+#: inside the altitude window from the test site. The band the fixture's measured
+#: limits produce is -30 to +25, so -60 is clear of it with room to spare.
+CLEAR_OF_THE_BAND = -60.0
 
 
 def slew(position: SkyPosition) -> SetProperty:
@@ -147,7 +151,7 @@ class TestAltitudeLimits:
     def test_a_target_inside_the_window_passes_this_rule(
         self, calibrated: SafetyConfig
     ) -> None:
-        position = target_at(0.0, 20.0, NIGHT)
+        position = target_at(CLEAR_OF_THE_BAND, 20.0, NIGHT)
         assert (
             calibrated.limits.altitude_min_deg
             < altitude_of(position, NIGHT)
@@ -192,7 +196,9 @@ class TestTheSun:
 
     def test_the_same_target_is_permitted_at_night(self, calibrated: SafetyConfig) -> None:
         """The positive control for both Sun rules: darkness lifts them and nothing else."""
-        permitted = governor_for(calibrated).validate(slew(target_at(-10, 20, NIGHT)))
+        permitted = governor_for(calibrated).validate(
+            slew(target_at(CLEAR_OF_THE_BAND, 20, NIGHT))
+        )
         assert isinstance(permitted, Ok)
 
 
@@ -210,37 +216,56 @@ class TestMeridianLimits:
         assert decision.rule == "meridian"
         assert "meridian-calibration" in decision.reason
 
-    def test_past_the_east_limit_is_refused(self, calibrated: SafetyConfig) -> None:
-        east, _ = calibrated.limits.meridian.effective_hour_angle_limits_deg()
-        decision = governor_for(calibrated).validate(slew(target_at(east - 5.0, 20.0, NIGHT)))
+    def test_the_meridian_itself_is_refused(self, calibrated: SafetyConfig) -> None:
+        """Culmination is where the mirror cell reaches a leg. It is the worst case."""
+        decision = governor_for(calibrated).validate(slew(target_at(0.0, 20.0, NIGHT)))
         assert isinstance(decision, Rejected)
         assert decision.rule == "meridian"
 
-    def test_past_the_west_limit_is_refused(self, calibrated: SafetyConfig) -> None:
-        _, west = calibrated.limits.meridian.effective_hour_angle_limits_deg()
-        decision = governor_for(calibrated).validate(slew(target_at(west + 5.0, 20.0, NIGHT)))
-        assert isinstance(decision, Rejected)
-        assert decision.rule == "meridian"
-
-    def test_the_safety_margin_is_what_is_enforced_not_the_measurement(
+    def test_inside_the_band_on_the_east_side_is_refused(
         self, calibrated: SafetyConfig
     ) -> None:
-        """Between the measured limit and the enforced one is where the margin lives."""
+        east, _ = calibrated.limits.meridian.effective_hour_angle_limits_deg()
+        decision = governor_for(calibrated).validate(slew(target_at(east + 5.0, 20.0, NIGHT)))
+        assert isinstance(decision, Rejected)
+        assert decision.rule == "meridian"
+
+    def test_inside_the_band_on_the_west_side_is_refused(
+        self, calibrated: SafetyConfig
+    ) -> None:
+        _, west = calibrated.limits.meridian.effective_hour_angle_limits_deg()
+        decision = governor_for(calibrated).validate(slew(target_at(west - 5.0, 20.0, NIGHT)))
+        assert isinstance(decision, Rejected)
+        assert decision.rule == "meridian"
+
+    def test_the_margin_is_what_is_enforced_not_the_measurement(
+        self, calibrated: SafetyConfig
+    ) -> None:
+        """Between the measured limit and the enforced one is where the margin lives.
+
+        An hour angle just outside what was measured is still refused, because
+        the margin widened the band past it. Enforcing the measurement itself
+        would spend the margin.
+        """
         margin = calibrated.limits.meridian.safety_margin_deg
         assert margin > 0.0
-        inside_the_measurement = WEST_LIMIT_DEG - margin / 2.0
         governor = governor_for(calibrated)
-        decision = governor.validate(slew(target_at(inside_the_measurement, 20.0, NIGHT)))
+        just_outside_the_measurement = EAST_LIMIT_DEG - margin / 2.0
+        decision = governor.validate(slew(target_at(just_outside_the_measurement, 20.0, NIGHT)))
         assert isinstance(decision, Rejected), (
-            "an hour angle inside the measured limit but inside the margin must be "
-            "refused; enforcing the measurement itself would spend the margin"
+            "an hour angle outside the measured limit but inside the margin must "
+            "still be refused"
         )
-        assert isinstance(
-            governor.validate(slew(target_at(EAST_LIMIT_DEG + margin + 1.0, 20.0, NIGHT))), Ok
-        )
+        assert decision.rule == "meridian"
 
-    def test_between_the_limits_is_permitted(self, calibrated: SafetyConfig) -> None:
-        assert isinstance(governor_for(calibrated).validate(slew(target_at(0, 20, NIGHT))), Ok)
+    def test_clear_of_the_band_is_permitted(self, calibrated: SafetyConfig) -> None:
+        """The sky outside the band is free — which is most of the night."""
+        east, _ = calibrated.limits.meridian.effective_hour_angle_limits_deg()
+        assert east > CLEAR_OF_THE_BAND, "this test's target must be outside the band"
+        decision = governor_for(calibrated).validate(
+            slew(target_at(CLEAR_OF_THE_BAND, 20.0, NIGHT))
+        )
+        assert isinstance(decision, Ok)
 
 
 class TestWhatCountsAsPointing:
@@ -508,7 +533,9 @@ class TestNothingApprovedEverViolatesALimit:
             TEST_SITE.latitude,
         )[0]
         assert limits.altitude_min_deg <= altitude <= limits.altitude_max_deg
-        assert east <= hour_angle <= west
+        assert not east < hour_angle < west, (
+            "the limits bracket the band the tube may not enter (ADR 0020)"
+        )
         assert angular_separation_deg(position, sun) >= limits.sun_avoidance_deg
         assert sun_altitude <= limits.sun_altitude_max_deg
 

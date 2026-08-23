@@ -742,7 +742,13 @@ Requirements:
    through the meridian region in both declination extremes, recording the hour angle at
    which clearance falls below a hand's width. Repeat for the declination range actually
    used. Record the most restrictive values.
-4. Measured values minus `safety_margin_deg` become the enforced hard limits.
+4. Measured values minus `safety_margin_deg` become the enforced hard limits —
+   "minus" meaning **more conservative**, not literally subtracted from both. The
+   two limits bracket a band around the meridian that the tube may not enter, so
+   the margin *widens* it at each edge: measured −25/+20 with a 5° margin is
+   enforced as "nothing between −30 and +25". The collision is at culmination,
+   where a Newtonian points steeply and the primary mirror cell end swings down
+   towards a leg (ADR 0020).
 5. Limits are enforced **in the governor**, not in Ekos and never in the agent. The agent
    physically cannot emit a slew that violates them — the tool call is rejected before
    reaching the executor.

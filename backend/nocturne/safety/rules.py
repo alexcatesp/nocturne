@@ -192,6 +192,11 @@ def enforce_sun_altitude_gate(command: Command, context: RuleContext) -> Rejecte
 def enforce_meridian_limits(command: Command, context: RuleContext) -> Rejected | None:
     """SPEC section 9.1 — the tripod collision. The highest-severity limit here.
 
+    The two limits bracket the band the tube may **not** enter, not the range it
+    may (ADR 0020). A Newtonian points steeply near culmination and the end
+    carrying the primary mirror cell swings down towards a leg; culmination is
+    the meridian.
+
     While ``meridian.calibrated`` is false there is no limit to enforce and no
     safe subset to fall back on, so every pointing command is refused (ADR 0019).
     """
@@ -213,15 +218,16 @@ def enforce_meridian_limits(command: Command, context: RuleContext) -> Rejected 
         )
     east, west = meridian.effective_hour_angle_limits_deg()
     angle = hour_angle_deg(position.ra_hours, context.when, site.longitude)
-    if angle < east or angle > west:
-        side = "east" if angle < east else "west"
+    if east < angle < west:
         return Rejected(
             rule="meridian",
             reason=(
-                f"the target is at hour angle {angle:+.1f} degrees, past the enforced "
-                f"{side} limit of {east:+.1f} to {west:+.1f} degrees. Those are the "
-                f"measured limits narrowed by the {meridian.safety_margin_deg}-degree "
-                f"safety margin from {CONFIG_FILES} (SPEC section 9.1)"
+                f"the target is at hour angle {angle:+.1f} degrees, inside the "
+                f"{east:+.1f} to {west:+.1f} degree band around the meridian where the "
+                "tube reaches a tripod leg. Those are the measured limits widened by "
+                f"the {meridian.safety_margin_deg}-degree safety margin from "
+                f"{CONFIG_FILES}. Wait for the target to clear the band, or flip "
+                "(SPEC section 9.1)"
             ),
         )
     return None

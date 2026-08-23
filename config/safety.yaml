@@ -21,20 +21,16 @@ limits:
     hour_angle_west_limit_deg: null
     safety_margin_deg: 5
 
-    # Not measurements of your tripod, and not edited during calibration.
-    #
-    # absolute_hour_angle_bound_deg is the outer envelope: no measured profile,
-    # from the calibration tool or anywhere else, may authorise pointing beyond
-    # it. Any real collision limit on a rig like this sits well inside 45 deg
-    # (three hours of RA); the bound is here to catch a limit marked at the
-    # wrong moment before it becomes an enforced number. Raise it only if your
-    # own measurements genuinely need more, and know that you are doing it.
-    #
-    # latitude_tolerance_deg is how far the mount may travel before a
-    # calibration stops applying. The polar axis is tilted to the latitude, so
-    # the arc the tube sweeps past the legs changes with it: 0.5 deg is about
+    # The two limits above bracket the region the tube may NOT enter, not the
+    # region it may. A Newtonian points steeply near culmination and the mirror
+    # cell end swings down towards a leg; culmination is the meridian. So the
+    # margin WIDENS that band: measured -25 and +20 with a margin of 5 are
+    # enforced as "nothing between -30 and +25" (ADR 0020).
+
+    # Not a measurement of your tripod. How far the mount may travel before a
+    # calibration stops applying: the polar axis is tilted to your latitude, so
+    # the arc the tube sweeps past the legs changes with it. 0.5 deg is about
     # 55 km of travel and a tenth of the safety margin above.
-    absolute_hour_angle_bound_deg: 45
     latitude_tolerance_deg: 0.5
 
     flip_strategy: "flip"        # "flip" | "stop"
