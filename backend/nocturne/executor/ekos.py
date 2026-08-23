@@ -57,9 +57,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 import re
 import xml.etree.ElementTree as ElementTree
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from enum import StrEnum
 from types import TracebackType
 from typing import Any, Final, final
@@ -69,7 +71,7 @@ from dbus_next.aio import MessageBus, ProxyInterface
 
 from nocturne.executor.settings import EkosSettings
 from nocturne.safety.commands import ResolvedTarget
-from nocturne.safety.sky import DEGREES_PER_HOUR, datetime_from_julian_date
+from nocturne.safety.sky import DEGREES_PER_HOUR, SkyPosition, datetime_from_julian_date
 
 logger = logging.getLogger("nocturne.executor.ekos")
 
@@ -147,6 +149,108 @@ REQUIRED_MOUNT_PROPERTIES: Final[frozenset[str]] = frozenset({"equatorialCoords"
 #: is the thing ``require_the_mount_to_be_parked`` exists to prevent.
 PARK_STATUS_PARKED: Final = 1
 
+#: The Ekos align module. Created when Ekos starts, like the mount module.
+EKOS_ALIGN_PATH: Final = "/KStars/Ekos/Align"
+EKOS_ALIGN_INTERFACE: Final = "org.kde.kstars.Ekos.Align"
+
+#: The align methods the bridge calls. Twelve of the thirteen the module
+#: declares; ``loadAndSlew`` is the one exception and the reason is below.
+REQUIRED_ALIGN_METHODS: Final[frozenset[str]] = frozenset(
+    {
+        "captureAndSolve",
+        "abort",
+        "setSolverAction",
+        "setSolverMode",
+        "setTargetCoords",
+        "setTargetPositionAngle",
+        "setBinningIndex",
+        "getSolutionResult",
+        "getTargetCoords",
+        "getLoadAndSlewStatus",
+        "cameraInfo",
+        "telescopeInfo",
+    }
+)
+
+#: Align-module methods Nocturne must not call, and why. One entry, and it is
+#: not caution — it is the source (ADR 0024).
+FORBIDDEN_ALIGN_METHODS: Final[Mapping[str, str]] = {
+    "loadAndSlew": "solves an image off disk and slews to whatever it finds, so the "
+    "governor cannot know the destination until the mount is already there. Worse, "
+    "align_goto.cpp shows it sets m_SolveFromFile, which makes executeGOTO() slew "
+    "regardless of the goto mode, and leaves m_CurrentGotoMode at GOTO_SLEW — so it "
+    "would turn the next ordinary solve into a slew as well",
+}
+
+#: Align-module properties the bridge reads. One, deliberately.
+#:
+#: The module declares seven, and listing all seven would look thorough and be
+#: worse: the containment check exists to refuse a KStars whose surface has
+#: moved out from under a call Nocturne makes, and a property nothing reads
+#: cannot break a call. Requiring it would turn an irrelevant upstream rename
+#: into a rig that will not start.
+REQUIRED_ALIGN_PROPERTIES: Final[frozenset[str]] = frozenset({"status"})
+
+#: ``Ekos::Align::GotoMode``, from ``kstars/ekos/align/align.h``:
+#: ``{GOTO_SYNC, GOTO_SLEW, GOTO_NOTHING}``. What Ekos does with a solution once
+#: it has one.
+#:
+#: **Nocturne uses the third and only the third.** With ``GOTO_NOTHING``,
+#: ``Align::executeGOTO()`` does nothing at all: solving becomes a read, and what
+#: happens next is a command the safety governor sees. The other two make Ekos
+#: sync or slew the mount itself, behind the governor, which is the second door
+#: CLAUDE.md invariant 1 forbids (ADR 0024).
+GOTO_MODE_SYNC: Final = 0
+GOTO_MODE_SLEW: Final = 1
+GOTO_MODE_NOTHING: Final = 2
+
+#: ``SolverMode``: 0 local (StellarSolver, on this Pi), 1 remote (an astrometry
+#: driver on the indiserver). Nocturne solves locally — SPEC section 4 builds
+#: StellarSolver for exactly this — and says so explicitly rather than inheriting
+#: whatever the profile was last left on.
+SOLVER_MODE_LOCAL: Final = 0
+SOLVER_MODE_REMOTE: Final = 1
+
+#: ``Ekos::AlignState``, from ``kstars/ekos/ekos.h`` at the pinned commit. The
+#: DBus property is a bare ``i``, so the names live here.
+#:
+#: ``ALIGN_SYNCING`` and ``ALIGN_SLEWING`` are in this list and Nocturne should
+#: never see either: they are the states Ekos enters when it acts on a solution
+#: itself, which the goto mode set by every solve rules out. Seeing one means
+#: something put the module into a mode Nocturne did not ask for.
+ALIGN_STATE_NAMES: Final[Mapping[int, str]] = {
+    0: "idle",
+    1: "complete",
+    2: "failed",
+    3: "aborted",
+    4: "in progress",
+    5: "successful",
+    6: "syncing",
+    7: "slewing",
+    8: "rotating",
+    9: "suspended",
+}
+
+#: The one state that means a solution is in hand.
+ALIGN_STATE_SUCCESSFUL: Final = 5
+
+#: The two Nocturne must never see, because they are Ekos moving the mount.
+ALIGN_STATES_THAT_MOVE_THE_MOUNT: Final[frozenset[int]] = frozenset({6, 7})
+
+#: ``getSolutionResult()`` returns **three** doubles, and the first is not what
+#: KStars' own documentation says it is. ``align_goto.cpp`` returns
+#: ``sOrientation << sRA << sDEC``; the doxygen comment on the declaration says
+#: "First item is RA in degrees. Second item is DEC in degrees."
+#:
+#: Following the comment would read the field orientation as a right ascension
+#: and the right ascension as a declination — a fabricated position, syncable
+#: into the mount's model, with nothing in the ``ad`` signature to object. The
+#: indices are therefore named here, from the implementation, and asserted in CI
+#: against the excerpt in ``kstars-mount-dbus-units.txt``.
+SOLUTION_ORIENTATION_INDEX: Final = 0
+SOLUTION_RA_INDEX: Final = 1
+SOLUTION_DEC_INDEX: Final = 2
+
 #: The main KStars object. Not Ekos': it exists from the moment KStars starts,
 #: and it is where the sky catalogue lives.
 KSTARS_PATH: Final = "/KStars"
@@ -166,6 +270,24 @@ UNRESOLVED_OBJECT_XML: Final = "<xml></xml>"
 
 _DBUS_SERVICE: Final = "org.freedesktop.DBus"
 _DBUS_PATH: Final = "/org/freedesktop/DBus"
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class AlignSolution:
+    """What the plate solver found, as it reports it.
+
+    ``position_j2000`` is deliberately named for its frame. The align module
+    answers in J2000 and the mount points in the equinox of date; a solution
+    handed to ``Mount.sync`` without precessing writes 0.3 degrees of frame
+    error into the mount's model, every time.
+    """
+
+    position_j2000: SkyPosition
+    #: The field's orientation in degrees, as the solver measured it. Carried
+    #: because it is the first element of the answer and dropping it silently is
+    #: how the index mistake gets made again.
+    orientation_deg: float
 
 
 class EkosError(Exception):
@@ -320,6 +442,7 @@ class EkosBridge:
         self._indi: ProxyInterface | None = None
         self._kstars: ProxyInterface | None = None
         self._mount: ProxyInterface | None = None
+        self._align: ProxyInterface | None = None
         self._state = BridgeState.DISCONNECTED
         self._handlers: list[StateHandler] = []
         self._watchdog: asyncio.Task[None] | None = None
@@ -422,6 +545,7 @@ class EkosBridge:
         # what makes a mount call after a restart raise rather than address a
         # dead object: attach_modules() has to be run again.
         self._mount = None
+        self._align = None
         self._set_state(BridgeState.CONNECTED)
 
     async def _open_bus(self) -> MessageBus:
@@ -444,6 +568,7 @@ class EkosBridge:
         self._indi = None
         self._kstars = None
         self._mount = None
+        self._align = None
         if self._bus is not None:
             await close_bus(self._bus)
             self._bus = None
@@ -504,9 +629,10 @@ class EkosBridge:
             raise EkosInterfaceError(
                 f"{interface} is missing the propert(ies) "
                 f"{', '.join(missing_properties)}. It offers: "
-                f"{', '.join(sorted(offered_properties)) or '<nothing>'}. Three mount "
-                "commands cannot be judged without these, so the bridge refuses to "
-                "attach rather than command a mount it cannot read."
+                f"{', '.join(sorted(offered_properties)) or '<nothing>'}. Nothing "
+                "here is read for decoration: a command that cannot be judged "
+                "without one of these would otherwise be judged without it, so the "
+                "bridge refuses to attach instead."
             )
         proxy = bus.get_proxy_object(KSTARS_BUS_NAME, path, introspection)
         return proxy.get_interface(interface)
@@ -590,6 +716,11 @@ class EkosBridge:
         """Whether the bridge holds a live handle on the Ekos mount module."""
         return self._mount is not None and self.is_connected
 
+    @property
+    def is_align_attached(self) -> bool:
+        """Whether the bridge holds a live handle on the Ekos align module."""
+        return self._align is not None and self.is_connected
+
     async def attach_modules(self, *, timeout_s: float | None = None) -> None:
         """Attach to the Ekos module objects, waiting for Ekos to create them.
 
@@ -628,10 +759,20 @@ class EkosBridge:
                     REQUIRED_MOUNT_METHODS,
                     properties=REQUIRED_MOUNT_PROPERTIES,
                 )
+                self._align = await self._interface(
+                    bus,
+                    EKOS_ALIGN_PATH,
+                    EKOS_ALIGN_INTERFACE,
+                    REQUIRED_ALIGN_METHODS,
+                    properties=REQUIRED_ALIGN_PROPERTIES,
+                )
             except EkosInterfaceError as exc:
                 last = exc
             else:
-                logger.info("Ekos mount module attached", extra={"path": EKOS_MOUNT_PATH})
+                logger.info(
+                    "Ekos modules attached",
+                    extra={"paths": [EKOS_MOUNT_PATH, EKOS_ALIGN_PATH]},
+                )
                 return
             if asyncio.get_running_loop().time() >= deadline:
                 raise EkosInterfaceError(
@@ -862,6 +1003,163 @@ class EkosBridge:
         """
         raw = await self._get_property(self._mount_interface(), "parkStatus")
         return int(raw) == PARK_STATUS_PARKED
+
+    # ---------------------------------------------------------- the align
+
+    # Twelve calls. What the module also offers and Nocturne does not use is
+    # FORBIDDEN_ALIGN_METHODS above, with the reason from KStars' own source.
+    #
+    # **Solving is a read.** Every one of these either configures the solver or
+    # asks it a question; none of them moves the instrument, and that is not an
+    # accident of which ones were chosen. Ekos acts on a solution in
+    # Align::executeGOTO(), which does nothing at all while the goto mode is
+    # GOTO_NOTHING — so the mode is set to GOTO_NOTHING as part of every solve,
+    # by the Executor, in the same governed command. What happens to the mount
+    # afterwards is a decision Nocturne takes and the governor sees (ADR 0024).
+
+    def _align_interface(self) -> ProxyInterface:
+        """The align module, or a refusal that says which step was skipped."""
+        if not self.is_connected:
+            raise EkosError(
+                f"not connected to KStars; the bridge is {self._state.value}. "
+                "Call connect() first, or wait for KStars to come back."
+            )
+        if self._align is None:
+            raise EkosError(
+                "the Ekos align module is not attached. Ekos creates its module "
+                "objects when it starts, so call start_ekos() and then "
+                "attach_modules() before solving."
+            )
+        return self._align
+
+    async def align_set_solver_action(self, mode: int) -> None:
+        """Choose what Ekos does with a solution once it has one.
+
+        Nocturne passes :data:`GOTO_MODE_NOTHING` and nothing else; the argument
+        exists because the DBus method takes one, and a structural test asserts
+        that no other value is ever passed.
+        """
+        await self._call(self._align_interface(), "setSolverAction", int(mode))
+
+    async def align_set_solver_mode(self, mode: int) -> None:
+        """Solve locally or on a remote astrometry driver."""
+        await self._call(self._align_interface(), "setSolverMode", int(mode))
+
+    async def align_capture_and_solve(self) -> bool:
+        """Expose a frame and plate-solve it.
+
+        Returns whether the procedure *started*. KStars is explicit that a true
+        return means "started successfully", and it returns true when retrying —
+        so this says nothing about whether a solution was found. That is read
+        from :meth:`align_status` and :meth:`align_solution`.
+        """
+        return bool(await self._call(self._align_interface(), "captureAndSolve"))
+
+    async def align_abort(self) -> None:
+        """Stop the solver. Declared NoReply, so there is nothing to report."""
+        await self._call(self._align_interface(), "abort")
+
+    async def align_set_target_coords(self, ra_hours: float, dec_deg: float) -> None:
+        """Set the coordinates the solver measures its solution against.
+
+        **J2000**, right ascension in hours — not the equinox of date the mount
+        works in, and not the degrees ``getSolutionResult`` answers in. Three
+        conventions on one interface; this is the one that takes hours and J2000,
+        and ``align_goto.cpp`` setting ``ra0``/``dec0`` is where that is settled.
+        """
+        await self._call(
+            self._align_interface(), "setTargetCoords", float(ra_hours), float(dec_deg)
+        )
+
+    async def align_set_target_position_angle(self, angle_deg: float) -> None:
+        """Set the position angle the rotator should reach, in degrees."""
+        await self._call(self._align_interface(), "setTargetPositionAngle", float(angle_deg))
+
+    async def align_set_binning_index(self, index: int) -> None:
+        """Set the solver's capture binning, by index into the camera's list."""
+        await self._call(self._align_interface(), "setBinningIndex", int(index))
+
+    async def align_solution(self) -> AlignSolution | None:
+        """The last solution, or ``None`` if the solver has not produced one.
+
+        The position is **J2000**, because that is what the solver reports and
+        what ``align_solver.cpp`` divides by fifteen before storing as ``ra0``.
+        Converting it to the mount's frame is
+        :func:`~nocturne.safety.sky.precess_j2000_to_date`, and it happens in the
+        executor rather than here so that the boundary has exactly one place.
+
+        Raises:
+            EkosError: if the answer is not the three doubles it is documented —
+                wrongly — to be. See :data:`SOLUTION_RA_INDEX`.
+        """
+        raw = await self._get_property_or_call(self._align_interface(), "getSolutionResult")
+        values = [float(item) for item in raw or ()]
+        if len(values) <= SOLUTION_DEC_INDEX:
+            raise EkosError(
+                f"the align module answered getSolutionResult with {raw!r}: "
+                f"{len(values)} values where the implementation returns three "
+                "(orientation, RA, DEC). The shape of the answer has changed."
+            )
+        ra_degrees = values[SOLUTION_RA_INDEX]
+        dec_degrees = values[SOLUTION_DEC_INDEX]
+        if not (math.isfinite(ra_degrees) and math.isfinite(dec_degrees)):
+            return None
+        try:
+            position = SkyPosition(ra_hours=ra_degrees / DEGREES_PER_HOUR, dec_deg=dec_degrees)
+        except ValueError:
+            # INVALID_VALUE, which is what the fields hold before a solve.
+            return None
+        return AlignSolution(
+            position_j2000=position, orientation_deg=values[SOLUTION_ORIENTATION_INDEX]
+        )
+
+    async def align_target_coords(self) -> SkyPosition | None:
+        """The target the solver is measuring against, J2000, or ``None``."""
+        raw = await self._get_property_or_call(self._align_interface(), "getTargetCoords")
+        values = [float(item) for item in raw or ()]
+        if len(values) < 2:
+            return None
+        try:
+            return SkyPosition(ra_hours=values[0], dec_deg=values[1])
+        except ValueError:
+            return None
+
+    async def align_status(self) -> int:
+        """``Ekos::AlignState``. See :data:`ALIGN_STATE_NAMES`."""
+        return int(await self._get_property(self._align_interface(), "status"))
+
+    async def align_load_and_slew_status(self) -> int:
+        """The state of a load-and-slew procedure. Nocturne never starts one."""
+        return int(
+            await self._get_property_or_call(self._align_interface(), "getLoadAndSlewStatus")
+        )
+
+    async def align_camera_info(self) -> Sequence[float]:
+        """Width, height, pixel size x, pixel size y — of the solving camera."""
+        raw = await self._get_property_or_call(self._align_interface(), "cameraInfo")
+        return [float(item) for item in raw or ()]
+
+    async def align_telescope_info(self) -> Sequence[float]:
+        """Focal length and aperture, as Ekos has them for the active train."""
+        raw = await self._get_property_or_call(self._align_interface(), "telescopeInfo")
+        return [float(item) for item in raw or ()]
+
+    async def _get_property_or_call(self, interface: ProxyInterface, member: str) -> Any:
+        """Read ``member`` whether KStars exports it as a property or a method.
+
+        The align module declares ``status`` as a property and
+        ``getSolutionResult`` as a method, and which of the two a given accessor
+        is has changed between KStars releases. Asking for whichever exists costs
+        one ``getattr`` and removes a class of upgrade breakage that would
+        otherwise present as "not available on this KStars build".
+        """
+        getter = getattr(interface, f"get_{_snake(member)}", None)
+        if getter is not None:
+            try:
+                return await getter()
+            except Exception as exc:
+                raise EkosError(f"could not read {member}: {exc}") from exc
+        return await self._call(interface, member)
 
     # ------------------------------------------------------ the catalogue
 

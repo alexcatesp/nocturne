@@ -28,16 +28,19 @@ from dataclasses import dataclass
 from typing import Final, final
 
 from nocturne.safety.commands import (
+    AbortAlign,
     AbortMotion,
     Command,
     MountReport,
     ParkMount,
     ResetMountModel,
     ResolvedTarget,
+    SetAlignTarget,
     SetMeridianFlipOffset,
     SetProperty,
     SlewToCoordinates,
     SlewToTarget,
+    SolveHere,
     SyncToCoordinates,
     SyncToTarget,
     UnparkMount,
@@ -181,6 +184,11 @@ def pointing_intent(command: Command) -> Classification | None:
             return _read_coordinates(ra_hours, dec_deg)
         case SlewToTarget(target=target):
             return _read_coordinates(target.ra_hours, target.dec_deg)
+        case SetAlignTarget(ra_hours=ra_hours, dec_deg=dec_deg):
+            # Not a destination the instrument is going to, but the one Ekos
+            # would use if its goto mode were ever wrong. Checked as a
+            # destination anyway; ADR 0024 says why.
+            return _read_coordinates(ra_hours, dec_deg)
         case ParkMount() | UnparkMount() | AbortMotion():
             # None of the three names a place on the sky, so there is nothing
             # for the limits to be checked against. Why that is accepted rather
@@ -199,6 +207,11 @@ def pointing_intent(command: Command) -> Classification | None:
         case ResetMountModel() | SetMeridianFlipOffset():
             # Neither names a place either. One discards the frame, the other
             # configures when Ekos flips; MODEL_RULES and FLIP_RULES.
+            return None
+        case SolveHere() | AbortAlign():
+            # Solving is a read of the sky and aborting stops one. Neither
+            # commands motion — which for SolveHere is true only because the
+            # same command sets the goto mode that makes it true (ADR 0024).
             return None
         case _:
             # ConnectDevice and DisconnectDevice. Connecting a driver does not

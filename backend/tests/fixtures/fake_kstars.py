@@ -33,6 +33,8 @@ from dbus_next.aio import MessageBus
 from dbus_next.service import ServiceInterface, dbus_property, method
 
 from nocturne.executor.ekos import (
+    EKOS_ALIGN_INTERFACE,
+    EKOS_ALIGN_PATH,
     EKOS_INTERFACE,
     EKOS_MOUNT_INTERFACE,
     EKOS_MOUNT_PATH,
@@ -309,6 +311,104 @@ class FakeKStarsInterface(ServiceInterface):
         )
 
 
+class FakeAlignInterface(ServiceInterface):
+    """The subset of org.kde.kstars.Ekos.Align that the bridge calls.
+
+    Two things about it are copied from KStars' implementation rather than from
+    its documentation, because the documentation is wrong about both:
+
+    ``getSolutionResult`` returns **three** doubles — orientation, then right
+    ascension, then declination — where the doxygen comment on the declaration
+    says the first is the right ascension. A stub that returned two would let
+    the bridge read them in the wrong order and pass.
+
+    The solution is in **degrees** and in **J2000**, while ``setTargetCoords``
+    takes hours and J2000 and the mount takes hours and the equinox of date.
+    Three conventions on two interfaces, so this stub speaks the ones KStars
+    speaks and leaves the converting to the code under test.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(EKOS_ALIGN_INTERFACE)
+        self.calls: list[str] = []
+        #: Every goto mode the bridge has set. The whole safety argument for the
+        #: align module is that this is only ever GOTO_NOTHING, so a test needs
+        #: to be able to read the sequence rather than the last value.
+        self.solver_actions: list[int] = []
+        self.solver_modes: list[int] = []
+        self.binning_indexes: list[int] = []
+        #: (RA hours J2000, DEC degrees J2000) pairs handed to setTargetCoords.
+        self.targets: list[tuple[float, float]] = []
+        self.position_angles: list[float] = []
+        #: What the solver last found: orientation, RA degrees, DEC degrees.
+        #: INVALID_VALUE-ish by default, as the fields are before a solve.
+        self.solution = [0.0, float("nan"), float("nan")]
+        self.target = [0.0, 0.0]
+        self.align_state = 0
+        self.load_and_slew_state = 0
+        self.camera = [3008.0, 3008.0, 3.76, 3.76]
+        self.telescope = [1000.0, 200.0]
+        self.accepts = True
+
+    @method()
+    def captureAndSolve(self) -> "b":  # noqa: F821, N802
+        self.calls.append("captureAndSolve")
+        return self.accepts
+
+    @method()
+    def abort(self):
+        self.calls.append("abort")
+
+    @method()
+    def setSolverAction(self, mode: "i"):  # noqa: F821, N802
+        self.calls.append("setSolverAction")
+        self.solver_actions.append(mode)
+
+    @method()
+    def setSolverMode(self, mode: "u"):  # noqa: F821, N802
+        self.calls.append("setSolverMode")
+        self.solver_modes.append(mode)
+
+    @method()
+    def setTargetCoords(self, ra: "d", de: "d"):  # noqa: F821, N802
+        self.calls.append("setTargetCoords")
+        self.targets.append((ra, de))
+
+    @method()
+    def setTargetPositionAngle(self, value: "d"):  # noqa: F821, N802
+        self.calls.append("setTargetPositionAngle")
+        self.position_angles.append(value)
+
+    @method()
+    def setBinningIndex(self, binningIndex: "i"):  # noqa: F821, N802, N803
+        self.calls.append("setBinningIndex")
+        self.binning_indexes.append(binningIndex)
+
+    @method()
+    def getSolutionResult(self) -> "ad":  # noqa: F821, N802
+        return list(self.solution)
+
+    @method()
+    def getTargetCoords(self) -> "ad":  # noqa: F821, N802
+        return list(self.target)
+
+    @method()
+    def getLoadAndSlewStatus(self) -> "i":  # noqa: F821, N802
+        return self.load_and_slew_state
+
+    @method()
+    def cameraInfo(self) -> "ad":  # noqa: F821, N802
+        return list(self.camera)
+
+    @method()
+    def telescopeInfo(self) -> "ad":  # noqa: F821, N802
+        return list(self.telescope)
+
+    @dbus_property(access=PropertyAccess.READ)
+    def status(self) -> "i":  # noqa: F821
+        return self.align_state
+
+
 class MinimalMountInterface(ServiceInterface):
     """A mount module missing methods the bridge needs, to test the refusal."""
 
@@ -363,6 +463,7 @@ class FakeKStars:
         self.mount: ServiceInterface = (
             MinimalMountInterface() if minimal_mount else FakeMountInterface()
         )
+        self.align = FakeAlignInterface()
         self._modules_exported = False
 
     async def start(self) -> None:
@@ -380,6 +481,7 @@ class FakeKStars:
         if self._bus is None or self._modules_exported:
             return
         self._bus.export(EKOS_MOUNT_PATH, self.mount)
+        self._bus.export(EKOS_ALIGN_PATH, self.align)
         self._modules_exported = True
 
     def _withdraw_modules(self) -> None:
@@ -387,6 +489,7 @@ class FakeKStars:
         if self._bus is None or not self._modules_exported:
             return
         self._bus.unexport(EKOS_MOUNT_PATH, self.mount)
+        self._bus.unexport(EKOS_ALIGN_PATH, self.align)
         self._modules_exported = False
 
     @property

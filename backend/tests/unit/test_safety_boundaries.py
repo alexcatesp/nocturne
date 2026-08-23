@@ -22,6 +22,7 @@ import pytest
 
 from nocturne.executor import Executor
 from nocturne.safety import (
+    AbortAlign,
     AbortMotion,
     Command,
     ConnectDevice,
@@ -31,6 +32,7 @@ from nocturne.safety import (
     Rejected,
     Rule,
     SafetyGovernor,
+    SolveHere,
     UnparkMount,
 )
 from nocturne.schemas import load_config_bundle, load_safety_config
@@ -787,6 +789,13 @@ COMMANDS_THAT_NEED_NO_RULES = {
     ParkMount: "parking is the safe state every degradation path ends at",
     UnparkMount: "unparking commands no motion and names no destination",
     AbortMotion: "stopping the instrument is never refused",
+    # The align module (ADR 0024). A solve is a read of the sky: Ekos acts on a
+    # solution in executeGOTO(), which does nothing while the goto mode is
+    # "nothing", and SolveHere sets that mode as part of itself. That is the
+    # whole reason it commands no motion, and it is asserted structurally in
+    # TestSolvingCannotMoveTheMount below rather than trusted.
+    SolveHere: "solving is a read; the same command sets the mode that makes it one",
+    AbortAlign: "stopping the solver is never refused",
 }
 
 

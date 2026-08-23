@@ -38,16 +38,19 @@ from datetime import UTC, datetime
 from typing import Final, final
 
 from nocturne.safety.commands import (
+    AbortAlign,
     AbortMotion,
     Command,
     ConnectDevice,
     DisconnectDevice,
     ParkMount,
     ResetMountModel,
+    SetAlignTarget,
     SetMeridianFlipOffset,
     SetProperty,
     SlewToCoordinates,
     SlewToTarget,
+    SolveHere,
     SyncToCoordinates,
     SyncToTarget,
     UnparkMount,
@@ -164,6 +167,13 @@ COMMAND_RULES: Final[Mapping[type[Command], tuple[Rule, ...]]] = {
     ParkMount: (),
     UnparkMount: (),
     AbortMotion: (),
+    # The align module. Solving is a read — of the sky, through the camera —
+    # and it is one because SolveHere sets the goto mode that makes it one
+    # (ADR 0024). SetAlignTarget names a place, so it is checked like any other
+    # place even though nothing goes there.
+    SolveHere: (),
+    SetAlignTarget: POINTING_RULES,
+    AbortAlign: (),
 }
 
 
@@ -223,6 +233,17 @@ class SafetyGovernor:
         if self._config.limits.meridian.calibrated:
             return AUTONOMY_LEVELS[-1]
         return MAX_UNCALIBRATED_LEVEL
+
+    def now(self) -> datetime:
+        """The instant this governor's clock reads. A read, not a command.
+
+        Exposed so that the executor can share it. Anything that converts
+        between frames — a J2000 target into the equinox of date, say — is a
+        function of time, and a conversion computed from the system clock while
+        the rules were validated against an injected one would make a frozen
+        clock meaningless and a decision irreproducible from its log line.
+        """
+        return self._clock()
 
     def validate(self, command: Command) -> Decision:
         """Validate ``command`` — SPEC section 9.

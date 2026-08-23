@@ -70,7 +70,35 @@ MUTATING_METHODS: dict[str, ArgumentSet] = {
     "sync_to_target": (("M 31",), {}),
     "reset_mount_model": ((), {}),
     "set_meridian_flip": ((), {"enabled": False}),
+    # The align module. A solve moves nothing, but it is still a command: it
+    # exposes a frame and it sets the mode that makes it move nothing, and both
+    # of those are things the governor is entitled to see (ADR 0024).
+    "solve": ((), {}),
+    "set_align_target": ((5.0, 20.0), {}),
+    "abort_align": ((), {}),
 }
+
+#: Public async methods that are **reads**. SPEC section 9 gates commands;
+#: looking at a cached property, or asking the solver what it found, moves
+#: nothing and is not gated.
+#:
+#: Kept as an explicit list rather than as an exclusion, because the test below
+#: asserts these two together account for the whole public async surface: a new
+#: method that is neither fails, and deciding which of the two it is, is the
+#: point.
+READ_METHODS = (
+    "wait_for_property",
+    "wait_for_device",
+    "solution",
+    "solution_of_date",
+    "align_status",
+    "align_target",
+    "align_camera_info",
+    "align_telescope_info",
+)
+
+#: Lifecycle. Neither a command nor a read of the instrument.
+LIFECYCLE_METHODS = ("start", "aclose")
 
 #: The subset of the above that can be shown to consult the governor without a
 #: mount attached. The rest need one before there is a command to validate; that
@@ -85,6 +113,11 @@ MUTATING_METHODS_WITHOUT_A_MOUNT = (
     "unpark",
     "abort_motion",
     "set_meridian_flip",
+    # A solve reads the mount for nothing and needs no catalogue, so it can be
+    # shown to reach the governor without either.
+    "solve",
+    "abort_align",
+    "set_align_target",
 )
 
 
@@ -193,16 +226,38 @@ class TestEveryCommandIsValidated:
             await executor._perform(object(), timeout=1.0)  # type: ignore[arg-type]
         assert governor.seen == []
 
-    def test_every_mutating_method_is_accounted_for(self) -> None:
-        """A new mutating method added without a test here fails this test."""
-        public = {
+    def public_async_methods(self) -> set[str]:
+        return {
             name
             for name, member in inspect.getmembers(Executor, inspect.isfunction)
-            if not name.startswith("_")
-            and inspect.iscoroutinefunction(member)
-            and name not in {"start", "aclose", "wait_for_property", "wait_for_device"}
+            if not name.startswith("_") and inspect.iscoroutinefunction(member)
         }
-        assert public == set(MUTATING_METHODS)
+
+    def test_every_public_async_method_is_a_command_a_read_or_lifecycle(self) -> None:
+        """No fourth category, and no method in none of the three.
+
+        A method added to the Executor without a decision about which of these
+        it is fails here. That decision is the whole of what this file is about:
+        a command goes through the governor, a read does not, and getting one
+        filed as the other is how a gate stops being one.
+        """
+        accounted = set(MUTATING_METHODS) | set(READ_METHODS) | set(LIFECYCLE_METHODS)
+        assert self.public_async_methods() - accounted == set()
+
+    def test_no_method_is_filed_as_two_things_at_once(self) -> None:
+        assert set(MUTATING_METHODS) & set(READ_METHODS) == set()
+        assert set(MUTATING_METHODS) & set(LIFECYCLE_METHODS) == set()
+
+    def test_the_lists_describe_methods_that_exist(self) -> None:
+        """Three lists of names nobody implemented would partition perfectly."""
+        accounted = set(MUTATING_METHODS) | set(READ_METHODS) | set(LIFECYCLE_METHODS)
+        assert accounted - self.public_async_methods() == set()
+
+    def test_every_mutating_method_is_accounted_for(self) -> None:
+        """A new mutating method added without a test here fails this test."""
+        assert self.public_async_methods() - set(READ_METHODS) - set(LIFECYCLE_METHODS) == set(
+            MUTATING_METHODS
+        )
 
     def test_the_method_inventory_is_not_empty(self) -> None:
         """A comparison of two empty sets proves nothing about either."""

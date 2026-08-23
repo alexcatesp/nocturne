@@ -18,14 +18,22 @@ not gated; SPEC section 9 gates commands.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime
 from types import TracebackType
 from typing import final
 
-from nocturne.executor.ekos import EkosBridge, EkosError
+from nocturne.executor.ekos import (
+    GOTO_MODE_NOTHING,
+    SOLVER_MODE_LOCAL,
+    AlignSolution,
+    EkosBridge,
+    EkosError,
+)
 from nocturne.executor.indi.client import EventHandler, IndiClient
 from nocturne.executor.indi.protocol import ElementValue, Property
 from nocturne.safety import (
+    AbortAlign,
     AbortMotion,
     Approval,
     Command,
@@ -37,13 +45,20 @@ from nocturne.safety import (
     ResolvedTarget,
     SafetyGovernor,
     SafetyViolation,
+    SetAlignTarget,
     SetMeridianFlipOffset,
     SetProperty,
     SlewToCoordinates,
     SlewToTarget,
+    SolveHere,
     SyncToCoordinates,
     SyncToTarget,
     UnparkMount,
+)
+from nocturne.safety.sky import (
+    SkyPosition,
+    precess_date_to_j2000,
+    precess_j2000_to_date,
 )
 
 logger = logging.getLogger("nocturne.executor")
@@ -327,6 +342,87 @@ class Executor:
         command = SetMeridianFlipOffset(enabled=enabled, offset_deg=offset_deg)
         return await self._execute_mount(command, timeout=timeout)
 
+    # ----------------------------------------------------------- the align
+
+    async def solve(
+        self, *, binning_index: int | None = None, timeout: float | None = None
+    ) -> bool:
+        """Expose a frame, plate-solve it, and touch nothing else.
+
+        Returns whether the solve *started*. Whether it found anything is read
+        from :meth:`align_status` and :meth:`solution`, because KStars returns
+        true here when it is retrying.
+
+        The mount does not move. Ekos acts on a solution in ``executeGOTO()``,
+        which does nothing while the goto mode is "nothing" — and this sets that
+        mode as part of the same command rather than once at startup, because
+        Ekos changes it behind you: its polar-alignment path sets it, and
+        ``loadAndSlew`` leaves it on "slew" (ADR 0024).
+
+        What to do with the answer is a separate, governed decision:
+        :meth:`sync` to correct the mount's model, :meth:`slew` to go somewhere.
+        """
+        return await self._execute_mount(
+            SolveHere(binning_index=binning_index), timeout=timeout
+        )
+
+    async def set_align_target(
+        self, ra_hours_j2000: float, dec_deg_j2000: float, *, timeout: float | None = None
+    ) -> bool:
+        """Set the coordinates the solver measures itself against, if permitted.
+
+        Takes **J2000**, because that is what the align module takes. The
+        governor works in the equinox of date, so this precesses first and the
+        command carries the converted position — the conversion happens once,
+        here, where the frames meet.
+
+        Raises:
+            SafetyViolation: if that place is one the limits forbid.
+        """
+        of_date = precess_j2000_to_date(
+            SkyPosition(ra_hours=ra_hours_j2000, dec_deg=dec_deg_j2000), self._now()
+        )
+        command = SetAlignTarget(ra_hours=of_date.ra_hours, dec_deg=of_date.dec_deg)
+        return await self._execute_mount(command, timeout=timeout)
+
+    async def abort_align(self, *, timeout: float | None = None) -> bool:
+        """Stop the plate solver."""
+        return await self._execute_mount(AbortAlign(), timeout=timeout)
+
+    # Reads. Solving produces an answer and reading it moves nothing.
+
+    async def solution(self) -> AlignSolution | None:
+        """The last plate solution, in J2000, or ``None`` if there is not one."""
+        return await self._mount().align_solution()
+
+    async def solution_of_date(self) -> SkyPosition | None:
+        """The last plate solution in the frame the mount works in.
+
+        The align module answers in J2000 and the mount points in the equinox of
+        date — 0.3 degrees apart at this epoch. This is the form to hand to
+        :meth:`sync`, and it exists so that nobody has to remember to precess.
+        """
+        solved = await self.solution()
+        if solved is None:
+            return None
+        return precess_j2000_to_date(solved.position_j2000, self._now())
+
+    async def align_status(self) -> int:
+        """``Ekos::AlignState`` — see ``ALIGN_STATE_NAMES``."""
+        return await self._mount().align_status()
+
+    async def align_target(self) -> SkyPosition | None:
+        """The target the solver is measuring against, in J2000."""
+        return await self._mount().align_target_coords()
+
+    async def align_camera_info(self) -> Sequence[float]:
+        """Width, height and pixel size of the camera the solver is using."""
+        return await self._mount().align_camera_info()
+
+    async def align_telescope_info(self) -> Sequence[float]:
+        """Focal length and aperture, as Ekos has them for the active train."""
+        return await self._mount().align_telescope_info()
+
     # --------------------------------------------- what a command carries
 
     async def _mount_report(self) -> MountReport:
@@ -340,6 +436,47 @@ class Executor:
         return MountReport(
             ra_hours=ra_hours, dec_deg=dec_deg, parked=await self._mount().mount_is_parked()
         )
+
+    async def _solve(self, binning_index: int | None) -> bool:
+        """Configure the solver so that it moves nothing, then start it.
+
+        The order is the safety property. ``setSolverAction(GOTO_NOTHING)``
+        comes first and every time, because Ekos changes that mode on its own
+        and a solve started under the wrong one moves the mount without the
+        governor seeing a thing (ADR 0024).
+        """
+        bridge = self._mount()
+        await bridge.align_set_solver_action(GOTO_MODE_NOTHING)
+        await bridge.align_set_solver_mode(SOLVER_MODE_LOCAL)
+        if binning_index is not None:
+            await bridge.align_set_binning_index(binning_index)
+        return await bridge.align_capture_and_solve()
+
+    async def _set_align_target(self, ra_hours: float, dec_deg: float) -> bool:
+        """Hand the align module a target, converted back to the frame it takes.
+
+        The command carries the equinox of date, because that is the frame the
+        governor validates in. ``setTargetCoords`` takes J2000. So this is the
+        inverse of the conversion :meth:`set_align_target` did on the way in,
+        and it is here rather than there so that what the governor approved and
+        what KStars is told are the same position rather than two readings of
+        one number.
+        """
+        j2000 = precess_date_to_j2000(
+            SkyPosition(ra_hours=ra_hours, dec_deg=dec_deg), self._now()
+        )
+        await self._mount().align_set_target_coords(j2000.ra_hours, j2000.dec_deg)
+        return True
+
+    def _now(self) -> datetime:
+        """The governor's clock, so the executor and the rules share an instant.
+
+        A precession computed from the system clock while the governor validated
+        against an injected one would make a test that freezes time meaningless,
+        and would make a decision irreproducible from its log line for exactly
+        the reason SPEC section 9 gives the governor a clock at all.
+        """
+        return self._governor.now()
 
     async def _resolve(self, name: str) -> ResolvedTarget:
         """``name`` as a place on the sky, or an error naming what was not found.
@@ -439,6 +576,13 @@ class Executor:
                 return await self._mount().mount_reset_model()
             case SetMeridianFlipOffset(enabled=enabled, offset_deg=offset_deg):
                 return await self._mount().mount_set_meridian_flip(enabled, offset_deg)
+            case SolveHere(binning_index=binning_index):
+                return await self._solve(binning_index)
+            case SetAlignTarget(ra_hours=ra_hours, dec_deg=dec_deg):
+                return await self._set_align_target(ra_hours, dec_deg)
+            case AbortAlign():
+                await self._mount().align_abort()
+                return True
             case _:
                 # The governor rejects unregistered command types, so reaching
                 # here means the registry and this dispatch disagree.

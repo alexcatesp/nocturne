@@ -28,9 +28,15 @@ from nocturne.executor import (
     IndiSettings,
     UnknownTargetError,
 )
+from nocturne.executor.ekos import GOTO_MODE_NOTHING, SOLVER_MODE_LOCAL
 from nocturne.executor.settings import EkosSettings
 from nocturne.safety import SafetyGovernor, SafetyViolation
-from nocturne.safety.sky import DEGREES_PER_HOUR, julian_date
+from nocturne.safety.sky import (
+    DEGREES_PER_HOUR,
+    julian_date,
+    precess_date_to_j2000,
+    precess_j2000_to_date,
+)
 from nocturne.schemas import SafetyConfig, load_config_bundle
 from tests.fixtures.fake_indi import FakeIndiServer
 from tests.fixtures.fake_kstars import (
@@ -542,3 +548,176 @@ class TestTheModelResetAndTheFlipOffset:
         assert sent is not None
         assert sent[0] is False
         assert sent[1] == pytest.approx(0.0)
+
+
+class TestSolvingReachesTheAlignModuleAndMovesNothing:
+    """The claim ADR 0024 turns on, over a real bus.
+
+    The stub records the goto modes it is handed, and the mount stub records
+    every call it receives. After a solve the first list must contain only the
+    mode at which Ekos does nothing, and the second must be empty.
+    """
+
+    async def test_a_solve_sets_the_mode_that_moves_nothing_first(
+        self, executor: Executor, kstars: FakeKStars
+    ) -> None:
+        assert await executor.solve()
+        assert kstars.align.solver_actions == [GOTO_MODE_NOTHING]
+        assert kstars.align.solver_modes == [SOLVER_MODE_LOCAL]
+        assert kstars.align.calls.index("setSolverAction") < kstars.align.calls.index(
+            "captureAndSolve"
+        )
+
+    async def test_the_mount_receives_nothing(
+        self, executor: Executor, kstars: FakeKStars
+    ) -> None:
+        await executor.solve()
+        assert mount_of(kstars).calls == []
+        assert mount_of(kstars).slews == []
+        assert mount_of(kstars).syncs == []
+
+    async def test_every_solve_sets_the_mode_again(
+        self, executor: Executor, kstars: FakeKStars
+    ) -> None:
+        """Not once at startup. Ekos changes the mode behind you — its
+        polar-alignment path sets it, and loadAndSlew leaves it on slew — so a
+        solve that trusted an earlier call would be a slew after either."""
+        await executor.solve()
+        await executor.solve()
+        await executor.solve()
+        assert kstars.align.solver_actions == [GOTO_MODE_NOTHING] * 3
+
+    async def test_that_check_would_notice_a_mode_set_once(
+        self, executor: Executor, kstars: FakeKStars
+    ) -> None:
+        """The positive control for the test above."""
+        await executor.solve()
+        assert len(kstars.align.solver_actions) == 1
+        assert kstars.align.solver_actions != [GOTO_MODE_NOTHING] * 3
+
+    async def test_a_binning_index_is_passed_when_given_and_not_when_not(
+        self, executor: Executor, kstars: FakeKStars
+    ) -> None:
+        await executor.solve()
+        assert kstars.align.binning_indexes == []
+        await executor.solve(binning_index=2)
+        assert kstars.align.binning_indexes == [2]
+
+    async def test_aborting_reaches_the_solver(
+        self, executor: Executor, kstars: FakeKStars
+    ) -> None:
+        assert await executor.abort_align()
+        assert kstars.align.calls == ["abort"]
+
+
+class TestReadingTheSolution:
+    async def test_a_solution_comes_back_in_j2000_with_its_orientation(
+        self, executor: Executor, kstars: FakeKStars
+    ) -> None:
+        """Three elements, orientation first. KStars' own documentation says
+        the first is the right ascension; the implementation says otherwise and
+        the implementation is what runs."""
+        kstars.align.solution = [123.5, 10.6847, 41.269]
+
+        solved = await executor.solution()
+        assert solved is not None
+        assert solved.orientation_deg == pytest.approx(123.5)
+        assert solved.position_j2000.ra_hours == pytest.approx(10.6847 / 15.0)
+        assert solved.position_j2000.dec_deg == pytest.approx(41.269)
+
+    async def test_reading_it_the_documented_way_would_be_a_different_place(
+        self, executor: Executor, kstars: FakeKStars
+    ) -> None:
+        """The positive control, and the defect stated as a number.
+
+        Taking the first two elements as RA and DEC — which is what KStars'
+        comment says to do — gives declination 10.68 where the answer is 41.27.
+        Nothing in the signature distinguishes the two.
+        """
+        kstars.align.solution = [123.5, 10.6847, 41.269]
+        solved = await executor.solution()
+        assert solved is not None
+        assert solved.position_j2000.dec_deg != pytest.approx(10.6847)
+
+    async def test_no_solution_yet_reads_as_none(
+        self, executor: Executor, kstars: FakeKStars
+    ) -> None:
+        """Not as a position. The fields hold INVALID_VALUE before a solve, and
+        a coordinate of zero is a real place on the celestial equator."""
+        assert await executor.solution() is None
+
+    async def test_the_of_date_form_is_the_solution_precessed(
+        self, executor: Executor, kstars: FakeKStars
+    ) -> None:
+        """What :meth:`Executor.sync` wants, because the mount is not in J2000."""
+        kstars.align.solution = [0.0, 10.6847, 41.269]
+
+        solved = await executor.solution()
+        of_date = await executor.solution_of_date()
+        assert solved is not None
+        assert of_date is not None
+        assert of_date == precess_j2000_to_date(solved.position_j2000, NIGHT)
+
+    async def test_the_two_forms_are_not_the_same_position(
+        self, executor: Executor, kstars: FakeKStars
+    ) -> None:
+        """The positive control: if they were, the precession did nothing and
+        0.3 degrees of frame error would be going into every sync."""
+        kstars.align.solution = [0.0, 10.6847, 41.269]
+        solved = await executor.solution()
+        of_date = await executor.solution_of_date()
+        assert solved is not None
+        assert of_date is not None
+        assert of_date != solved.position_j2000
+
+    async def test_the_align_status_reads_back(
+        self, executor: Executor, kstars: FakeKStars
+    ) -> None:
+        kstars.align.align_state = 5  # ALIGN_SUCCESSFUL
+        assert await executor.align_status() == 5
+
+    async def test_the_camera_and_telescope_are_readable(
+        self, executor: Executor, kstars: FakeKStars
+    ) -> None:
+        assert list(await executor.align_camera_info()) == [3008.0, 3008.0, 3.76, 3.76]
+        assert list(await executor.align_telescope_info()) == [1000.0, 200.0]
+
+
+class TestTheAlignTargetCrossesTheFrameBoundaryOnce:
+    async def test_a_permitted_target_arrives_back_in_j2000(
+        self, executor: Executor, kstars: FakeKStars
+    ) -> None:
+        """In through J2000, validated in the equinox of date, out in J2000.
+
+        What KStars is told must be the position the governor approved, not a
+        second reading of the same number — so the two conversions have to be
+        inverses and this is where that is worth money.
+        """
+        of_date = target_at(CLEAR_OF_THE_BAND, USABLE_DECLINATION, NIGHT)
+        j2000 = precess_date_to_j2000(of_date, NIGHT)
+
+        assert await executor.set_align_target(j2000.ra_hours, j2000.dec_deg)
+        assert len(kstars.align.targets) == 1
+        sent_ra, sent_dec = kstars.align.targets[0]
+        assert sent_ra == pytest.approx(j2000.ra_hours, abs=1e-6)
+        assert sent_dec == pytest.approx(j2000.dec_deg, abs=1e-6)
+
+    async def test_a_refused_target_never_reaches_the_module(
+        self, executor: Executor, kstars: FakeKStars
+    ) -> None:
+        on_the_meridian = target_at(0.0, USABLE_DECLINATION, NIGHT)
+        j2000 = precess_date_to_j2000(on_the_meridian, NIGHT)
+
+        with pytest.raises(SafetyViolation, match="meridian"):
+            await executor.set_align_target(j2000.ra_hours, j2000.dec_deg)
+        assert kstars.align.targets == []
+
+    async def test_the_conversion_is_what_makes_the_refusal_land(
+        self, executor: Executor, kstars: FakeKStars
+    ) -> None:
+        """A target 0.3 degrees from the band edge is the case the frame
+        conversion decides, and this asserts the conversion is large enough to
+        be worth doing at all rather than that this particular target flips."""
+        of_date = target_at(0.0, USABLE_DECLINATION, NIGHT)
+        j2000 = precess_date_to_j2000(of_date, NIGHT)
+        assert j2000 != of_date

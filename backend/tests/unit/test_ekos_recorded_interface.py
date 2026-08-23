@@ -84,6 +84,10 @@ def mount() -> Interface:
     return declared_interfaces()[ekos.EKOS_MOUNT_INTERFACE]
 
 
+def align() -> Interface:
+    return declared_interfaces()[ekos.EKOS_ALIGN_INTERFACE]
+
+
 class TestTheRecordingIsUsable:
     """Without these, every assertion below could pass over an empty parse."""
 
@@ -392,16 +396,18 @@ class TestTheOpticalTrain:
         source = inspect.getsource(ekos)
         assert "OpticalTrain" not in source.replace(EKOS_OPTICAL_TRAIN, "")
 
-    def test_the_bridge_names_only_the_module_it_drives(self) -> None:
+    def test_the_bridge_names_only_the_modules_it_drives(self) -> None:
         """The M2 boundary, asserted rather than intended.
 
-        ``Mount`` is named because Nocturne drives it. The other four are not,
-        and each arrives with the commands that use it and the safety rules that
-        constrain it — never as a proxy handle somebody might find and call.
+        ``Mount`` and ``Align`` are named because Nocturne drives them. The
+        other three are not, and each arrives with the commands that use it and
+        the safety rules that constrain it — never as a proxy handle somebody
+        might find and call.
         """
         source = inspect.getsource(ekos)
         assert ekos.EKOS_MOUNT_INTERFACE in source
-        for node in ("Capture", "Focus", "Guide", "Align", "Scheduler"):
+        assert ekos.EKOS_ALIGN_INTERFACE in source
+        for node in ("Capture", "Focus", "Guide", "Scheduler"):
             assert f"org.kde.kstars.Ekos.{node}" not in source
 
     def test_that_boundary_check_can_fail(self) -> None:
@@ -826,3 +832,129 @@ class TestTheBridgeNamesAccessorsTheWayDbusNextDoes:
         the conversion has to keep working for the calls that already do.
         """
         assert ekos._snake(member) == accessor
+
+
+class TestTheAlignModuleTheBridgeDrives:
+    """``/KStars/Ekos/Align`` — the second Ekos module Nocturne uses."""
+
+    def test_the_path_is_a_child_of_the_ekos_object(self) -> None:
+        assert f"{ekos.EKOS_PATH}/Align" == ekos.EKOS_ALIGN_PATH
+        assert "Align" in running_child_nodes()[ekos.EKOS_PATH]
+
+    def test_it_did_not_exist_before_ekos_was_started(self) -> None:
+        assert ekos.EKOS_ALIGN_PATH not in exported_objects()
+
+    def test_the_path_exports_the_interface_the_bridge_asks_for(self) -> None:
+        exported = running_objects()[ekos.EKOS_ALIGN_PATH]
+        assert ekos.EKOS_ALIGN_INTERFACE in exported, sorted(
+            set(exported) - STANDARD_INTERFACES
+        )
+
+    def test_every_required_align_method_exists(self) -> None:
+        missing = sorted(ekos.REQUIRED_ALIGN_METHODS - align().method_names())
+        assert not missing, missing
+
+    def test_the_required_set_is_not_empty(self) -> None:
+        assert len(ekos.REQUIRED_ALIGN_METHODS) == 12
+        assert "captureAndSolve" in ekos.REQUIRED_ALIGN_METHODS
+
+    def test_an_align_method_kstars_does_not_have_is_reported_missing(self) -> None:
+        invented = frozenset({"captureAndSolve", "warpDrive"})
+        assert sorted(invented - align().method_names()) == ["warpDrive"]
+
+    def test_the_status_property_exists_and_is_an_integer(self) -> None:
+        assert align().properties["status"] == "i"
+        assert {"status"} == ekos.REQUIRED_ALIGN_PROPERTIES
+
+    def test_the_solution_comes_back_as_an_array_of_doubles(self) -> None:
+        """Which is why the element order has to be recorded: a wrong index is
+        the same type as a right one."""
+        overloads = align().methods["getSolutionResult"]
+        assert len(overloads) == 1
+        assert overloads[0].out_signature == "ad"
+        assert overloads[0].in_signature == ""
+
+    def test_set_target_coords_takes_two_doubles(self) -> None:
+        overloads = align().methods["setTargetCoords"]
+        assert overloads[0].in_signature == "dd"
+        assert overloads[0].argument_names == ("ra", "de")
+
+    def test_set_solver_action_takes_one_integer(self) -> None:
+        """The integer whose three values are the whole safety argument."""
+        overloads = align().methods["setSolverAction"]
+        assert overloads[0].in_signature == "i"
+        assert overloads[0].argument_names == ("mode",)
+
+    def test_capture_and_solve_takes_nothing_over_dbus(self) -> None:
+        """It has a defaulted C++ argument that the adaptor does not export."""
+        overloads = align().methods["captureAndSolve"]
+        assert overloads[0].in_signature == ""
+        assert overloads[0].out_signature == "b"
+
+    def test_load_and_slew_is_the_one_that_takes_a_file(self) -> None:
+        """Recorded so that "we do not call it" is about a real method."""
+        overloads = align().methods["loadAndSlew"]
+        assert overloads[0].in_signature == "s"
+        assert overloads[0].argument_names == ("", "fileURL")
+
+    def test_the_declared_and_exported_align_interfaces_agree(self) -> None:
+        live = running_objects()[ekos.EKOS_ALIGN_PATH][ekos.EKOS_ALIGN_INTERFACE].method_names()
+        assert align().method_names() == live
+
+
+class TestTheAlignStubMatchesTheRecordedSignatures:
+    def stub_signature(self, member: str) -> tuple[str, str]:
+        annotations = dict(
+            inspect.get_annotations(getattr(fake_kstars.FakeAlignInterface, member))
+        )
+        out = annotations.pop(_RETURN, "")
+        return "".join(annotations.values()), out
+
+    @pytest.mark.parametrize(
+        "member",
+        [
+            "captureAndSolve",
+            "abort",
+            "setSolverAction",
+            "setSolverMode",
+            "setTargetCoords",
+            "setTargetPositionAngle",
+            "setBinningIndex",
+            "getSolutionResult",
+            "getTargetCoords",
+            "getLoadAndSlewStatus",
+            "cameraInfo",
+            "telescopeInfo",
+        ],
+    )
+    def test_it_declares_what_kstars_declares(self, member: str) -> None:
+        recorded = align().methods[member][0]
+        assert self.stub_signature(member) == (
+            recorded.in_signature,
+            recorded.out_signature,
+        )
+
+    def test_the_stub_offers_everything_the_bridge_requires(self) -> None:
+        exported = {
+            name
+            for name, member in inspect.getmembers(
+                fake_kstars.FakeAlignInterface, inspect.isfunction
+            )
+            if not name.startswith("_")
+        }
+        assert exported >= ekos.REQUIRED_ALIGN_METHODS, sorted(exported)
+
+    def test_the_stub_does_not_offer_load_and_slew(self) -> None:
+        """A stub that answered it would make calling it look harmless."""
+        exported = {
+            name
+            for name, member in inspect.getmembers(
+                fake_kstars.FakeAlignInterface, inspect.isfunction
+            )
+            if not name.startswith("_")
+        }
+        assert exported & set(ekos.FORBIDDEN_ALIGN_METHODS) == set()
+
+    def test_the_stub_returns_three_solution_elements(self) -> None:
+        """Two would let the bridge read them in the wrong order and pass."""
+        assert len(fake_kstars.FakeAlignInterface().solution) == 3

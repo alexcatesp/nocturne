@@ -26,6 +26,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from nocturne.safety import (
+    AbortAlign,
     AbortMotion,
     ConnectDevice,
     DisconnectDevice,
@@ -36,10 +37,12 @@ from nocturne.safety import (
     ResetMountModel,
     RuleContext,
     SafetyGovernor,
+    SetAlignTarget,
     SetMeridianFlipOffset,
     SetProperty,
     SlewToCoordinates,
     SlewToTarget,
+    SolveHere,
     SyncToCoordinates,
     SyncToTarget,
     UnparkMount,
@@ -591,23 +594,28 @@ class TestTheExtractorIsTotal:
 #: test rather than derived from the code, so that adding a command type to the
 #: package cannot quietly satisfy the check above.
 _EXTRACTOR_KNOWS = {
-    ConnectDevice,
-    DisconnectDevice,
+    # Answered "this points" — the pointing rules apply to the coordinates.
     SetProperty,
     SlewToCoordinates,
     SlewToTarget,
+    SetAlignTarget,
+    # Answered "this moves nothing".
+    ConnectDevice,
+    DisconnectDevice,
     ParkMount,
     UnparkMount,
     AbortMotion,
+    AbortAlign,
     # Answered "not a pointing command" on purpose, and each for its own
     # reason: a sync reports where the instrument is rather than naming a
-    # destination, a model reset discards the frame, and the flip offset
-    # configures Ekos. All three are bounded by rules of their own
-    # (SYNC_RULES, MODEL_RULES, FLIP_RULES — ADR 0023).
+    # destination, a model reset discards the frame, the flip offset configures
+    # Ekos, and a solve is a read of the sky. Each is bounded by rules of its
+    # own, or by the shape of the command itself (ADR 0023, ADR 0024).
     SyncToCoordinates,
     SyncToTarget,
     ResetMountModel,
     SetMeridianFlipOffset,
+    SolveHere,
 }
 
 

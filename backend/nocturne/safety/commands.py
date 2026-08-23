@@ -274,3 +274,64 @@ class SetMeridianFlipOffset(Command):
         if not self.enabled:
             return "disable the Ekos meridian flip"
         return f"flip at hour angle {self.offset_deg:+.1f} deg, in Ekos"
+
+
+class SolveHere(Command):
+    """Expose a frame and plate-solve it, without acting on the answer.
+
+    Carries no rules, and that is the substantive decision (ADR 0024) rather
+    than an omission: this command *is* a read of the sky, and it is one only
+    because it also sets Ekos' goto mode to the value at which
+    ``Align::executeGOTO()`` does nothing. The two go together in one command
+    for that reason — set the mode once at startup and Ekos could be put back
+    into a slewing mode by its own polar-alignment path, or by a
+    ``loadAndSlew`` nobody meant to leave behind.
+
+    What happens to the mount afterwards is a :class:`SyncToCoordinates` or a
+    :class:`SlewToCoordinates`, decided by Nocturne and seen by the governor.
+    """
+
+    #: Seconds of exposure. ``None`` leaves the align module on whatever it was
+    #: configured with, which is what an operator adjusting it in the Ekos UI
+    #: expects.
+    binning_index: int | None = None
+
+    def describe(self) -> str:
+        return "capture and plate-solve, without moving the mount"
+
+
+class SetAlignTarget(Command):
+    """Set the coordinates the solver measures its solution against.
+
+    Moves nothing by itself. It carries the pointing rules anyway, and cheaply:
+    this is the coordinate Ekos would slew to if its goto mode were ever
+    something other than the one :class:`SolveHere` sets, so validating it means
+    that a regression in *that* rule still could not put the instrument
+    somewhere the limits forbid. Two locks on one door, and the second one costs
+    an arithmetic comparison.
+
+    **J2000**, because that is the frame the align module's ``setTargetCoords``
+    takes. The governor works in the equinox of date, so the executor precesses
+    before building the command and the command carries the result — one
+    conversion, at the boundary, where it can be seen.
+    """
+
+    ra_hours: float
+    dec_deg: float
+
+    def describe(self) -> str:
+        return (
+            f"set the align target to RA {self.ra_hours:.5f} h, "
+            f"DEC {self.dec_deg:+.4f} deg (equinox of date)"
+        )
+
+
+class AbortAlign(Command):
+    """Stop the plate solver.
+
+    Never refused, for the reason :class:`AbortMotion` is never refused: this is
+    what an operator reaches for when something is wrong.
+    """
+
+    def describe(self) -> str:
+        return "abort the plate solve"

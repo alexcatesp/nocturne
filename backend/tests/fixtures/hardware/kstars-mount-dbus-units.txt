@@ -219,3 +219,122 @@ What Nocturne takes from this
 - getObjectPositionInfo returns DEGREES. Nocturne divides by fifteen at that
   boundary and nowhere else.
 - parkStatus == 1 means parked. Nothing else does.
+
+Part 5 — the align module, where a doc comment is wrong about which is which
+-----------------------------------------------------------------------------
+Source : kstars/ekos/align/align.h, align_goto.cpp, align_solver.cpp, ekos/ekos.h
+Same commit as everything above.
+
+getSolutionResult() is declared with this comment:
+
+        /** DBUS interface function.
+             * Returns the solver's solution results
+             * @return Returns array of doubles. First item is RA in degrees. Second item is DEC in degrees.
+             */
+        Q_SCRIPTABLE QList<double> getSolutionResult();
+
+and implemented, in align_goto.cpp, like this:
+
+    QList<double> Align::getSolutionResult()
+    {
+        return QList<double>() << sOrientation << sRA << sDEC;
+    }
+
+THREE items, and the first is the field orientation. A caller following the
+comment reads the orientation as a right ascension and the right ascension as a
+declination — a position that is not anywhere, and nothing in the `ad`
+signature distinguishes it from a real one.
+
+The frame and units of sRA/sDEC are settled in align_solver.cpp, where the
+solution is stored:
+
+    sOrientation = orientation;
+    sRA          = ra;
+    sDEC         = dec;
+    ...
+    m_AlignCoord.setRA0(ra / 15.0);
+    m_AlignCoord.setDec0(dec);
+    m_AlignCoord.apparentCoord(static_cast<long double>(J2000), KStars::Instance()->data()->ut().djd());
+
+Divided by fifteen and set as ra0: so sRA is DEGREES, and the pair is J2000.
+Note the apparentCoord() call on the line after — KStars itself precesses to
+the equinox of date before using the solution, because the mount is not in
+J2000. Anything that syncs the raw solution skips that step.
+
+setTargetCoords is the other frame boundary, and it goes the other way:
+
+        /** DBUS interface function.
+             ...
+             * @param ra0 J2000 Right Ascension in hours.
+             * @param de0 J2000 Declination in degrees.
+             */
+        Q_SCRIPTABLE Q_NOREPLY void setTargetCoords(double ra0, double de0);
+
+    void Align::setTargetCoords(double ra0, double de0)
+    {
+        SkyPoint target;
+        target.setRA0(ra0);
+        target.setDec0(de0);
+        target.updateCoordsNow(KStarsData::Instance()->updateNum());
+        setTarget(target);
+    }
+
+J2000, right ascension in HOURS. So one interface answers in degrees and takes
+hours, and the mount next door takes hours in a different frame again.
+
+setSolverAction decides what Ekos does with a solution once it has one:
+
+        /** DBUS interface function.
+             * Select Solver Action after successfully solving an image.
+             * @param mode 0 for Sync, 1 for Slew To Target, 2 for Nothing (just display solution results)
+             */
+        Q_SCRIPTABLE Q_NOREPLY void setSolverAction(int mode);
+
+    typedef enum { GOTO_SYNC, GOTO_SLEW, GOTO_NOTHING } GotoMode;
+
+and align_goto.cpp is where that mode is acted on:
+
+    void Align::executeGOTO()
+    {
+        if (m_SolveFromFile)
+        {
+            m_DestinationCoord = m_AlignCoord;
+            m_TargetCoord = m_AlignCoord;
+            SlewToTarget();
+        }
+        else if (m_CurrentGotoMode == GOTO_SYNC)
+            Sync();
+        else if (m_CurrentGotoMode == GOTO_SLEW)
+            SlewToTarget();
+    }
+
+Two things follow, and both are load-bearing for Nocturne:
+
+  - With GOTO_NOTHING and an ordinary capture, executeGOTO() does nothing at
+    all. That is what makes a solve a read.
+  - m_SolveFromFile short-circuits the mode entirely. It is set by loadAndSlew:
+
+        bool Align::loadAndSlew(QString fileURL)
+        {
+            ...
+            m_SolveFromFile = true;
+            slewR->setChecked(true);
+            m_CurrentGotoMode = GOTO_SLEW;
+
+    so loadAndSlew slews whatever the mode was, AND leaves the mode on
+    GOTO_SLEW afterwards — which would turn the next ordinary solve into a
+    slew. Nocturne does not call it, and sets the mode as part of every solve
+    rather than once (ADR 0024).
+
+Ekos::AlignState, from kstars/ekos/ekos.h, for the `status` property (a bare
+`i` on the wire):
+
+    typedef enum
+    {
+        ALIGN_IDLE, ALIGN_COMPLETE, ALIGN_FAILED, ALIGN_ABORTED,
+        ALIGN_PROGRESS, ALIGN_SUCCESSFUL, ALIGN_SYNCING, ALIGN_SLEWING,
+        ALIGN_ROTATING, ALIGN_SUSPENDED
+    } AlignState;
+
+ALIGN_SUCCESSFUL is 5. ALIGN_SYNCING (6) and ALIGN_SLEWING (7) are Ekos moving
+the mount itself; Nocturne should never see either.
