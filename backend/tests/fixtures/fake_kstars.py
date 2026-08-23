@@ -24,12 +24,13 @@ member names are KStars', so they are camelCase rather than PEP 8.
 import asyncio
 import os
 import shutil
+import time
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 
-from dbus_next import BusType
+from dbus_next import BusType, PropertyAccess
 from dbus_next.aio import MessageBus
-from dbus_next.service import ServiceInterface, method
+from dbus_next.service import ServiceInterface, dbus_property, method
 
 from nocturne.executor.ekos import (
     EKOS_INTERFACE,
@@ -39,8 +40,11 @@ from nocturne.executor.ekos import (
     INDI_INTERFACE,
     INDI_PATH,
     KSTARS_BUS_NAME,
+    KSTARS_INTERFACE,
+    KSTARS_PATH,
     close_bus,
 )
+from nocturne.safety.sky import JULIAN_DATE_AT_UNIX_EPOCH, SECONDS_PER_DAY
 
 DEFAULT_DEVICES = (
     "Telescope Simulator",
@@ -141,6 +145,19 @@ class FakeMountInterface(ServiceInterface):
         self.calls: list[str] = []
         #: Every (RA hours, DEC degrees) pair this mount has been asked for.
         self.slews: list[tuple[float, float]] = []
+        #: The same, for syncs. Kept apart so a test can say which happened.
+        self.syncs: list[tuple[float, float]] = []
+        #: Names passed to gotoTarget and syncTarget.
+        self.named: list[str] = []
+        #: What setMeridianFlipValues was last told: (activate, degrees).
+        self.flip: tuple[bool, float] | None = None
+        #: Where this mount says it is: (RA hours, DEC degrees).
+        self.position = (0.0, 0.0)
+        #: ISD::ParkStatus. 0 is PARK_UNKNOWN, which is what a driver that has
+        #: not spoken yet reports, and it must not read as parked.
+        self.park_status = 0
+        #: KStars refuses a model reset on a mount that has no model.
+        self.has_alignment_model = True
         #: What the next call should return. KStars returns false when it could
         #: not send the command, and nothing above may read that as success.
         self.accepts = True
@@ -165,6 +182,131 @@ class FakeMountInterface(ServiceInterface):
     def abort(self) -> "b":  # noqa: F821
         self.calls.append("abort")
         return self.accepts
+
+    @method()
+    def sync(self, RA: "d", DEC: "d") -> "b":  # noqa: F821, N803
+        self.calls.append("sync")
+        self.syncs.append((RA, DEC))
+        return self.accepts
+
+    @method()
+    def gotoTarget(self, target: "s") -> "b":  # noqa: F821, N802
+        self.calls.append("gotoTarget")
+        self.named.append(target)
+        return self.accepts
+
+    @method()
+    def syncTarget(self, target: "s") -> "b":  # noqa: F821, N802
+        self.calls.append("syncTarget")
+        self.named.append(target)
+        return self.accepts
+
+    @method()
+    def resetModel(self) -> "b":  # noqa: F821, N802
+        self.calls.append("resetModel")
+        return self.accepts and self.has_alignment_model
+
+    @method()
+    def setMeridianFlipValues(self, activate: "b", hours: "d"):  # noqa: F821, N802
+        # The argument is named `hours` because KStars names it that. It is in
+        # degrees. That defect is the point of the test built on this stub.
+        self.calls.append("setMeridianFlipValues")
+        self.flip = (activate, hours)
+
+    @dbus_property(access=PropertyAccess.READ)
+    def equatorialCoords(self) -> "ad":  # noqa: F821, N802
+        return list(self.position)
+
+    @dbus_property(access=PropertyAccess.READ)
+    def parkStatus(self) -> "i":  # noqa: F821, N802
+        return self.park_status
+
+
+#: One catalogue entry, as KStars' two lookup documents describe it. Degrees for
+#: right ascension, because that is what KStars reports — Mount.slew takes hours,
+#: and the conversion between them is the bridge's job and is tested for.
+class CatalogueEntry:
+    def __init__(
+        self, name: str, ra_degrees: float, dec_degrees: float, type_name: str
+    ) -> None:
+        self.name = name
+        self.ra_degrees = ra_degrees
+        self.dec_degrees = dec_degrees
+        self.type_name = type_name
+
+
+#: A handful of objects, each chosen for what it lets a test say. M31 and M13 are
+#: ordinary deep-sky targets at very different declinations; Jupiter is here to
+#: be refused for moving; Polaris is circumpolar.
+DEFAULT_CATALOGUE = (
+    CatalogueEntry("M 31", 10.6847, 41.269, "Galaxy"),
+    CatalogueEntry("M 13", 250.423, 36.4613, "Globular Cluster"),
+    CatalogueEntry("M 42", 83.8221, -5.3911, "Nebula"),
+    CatalogueEntry("Jupiter", 45.0, 15.0, "Planet"),
+    CatalogueEntry("Polaris", 37.9529, 89.2641, "Star"),
+)
+
+
+class FakeKStarsInterface(ServiceInterface):
+    """The subset of org.kde.kstars the bridge calls: the catalogue lookups.
+
+    Both methods return XML built the way ``kstarsdbus.cpp`` builds it, including
+    the two things that are easy to get wrong and cost a telescope its target:
+    right ascension is in **degrees** in these documents while ``Mount.slew``
+    takes **hours**, and the clock is reported as a Julian date printed to three
+    decimal places, which quantises it to 86.4 seconds.
+    """
+
+    def __init__(self, catalogue: Sequence[CatalogueEntry] = DEFAULT_CATALOGUE) -> None:
+        super().__init__(KSTARS_INTERFACE)
+        self.catalogue = {entry.name.upper(): entry for entry in catalogue}
+        #: The Julian date this KStars' clock reads. Defaults to now, as a
+        #: running KStars' does, and is settable because a KStars whose
+        #: simulated clock has been stopped or moved is exactly what the
+        #: resolver's freshness rule exists to catch.
+        self.julian_date = JULIAN_DATE_AT_UNIX_EPOCH + time.time() / SECONDS_PER_DAY
+        self.lookups: list[str] = []
+        #: When set, both lookups return this instead of a real document. For
+        #: testing what the bridge does with an answer that is not the one
+        #: KStars documents — which is not hypothetical: an answer whose shape
+        #: changed under a KStars upgrade looks exactly like this.
+        self.broken: str | None = None
+
+    def _find(self, name: str) -> "CatalogueEntry | None":
+        self.lookups.append(name)
+        return self.catalogue.get(name.upper())
+
+    @method()
+    def getObjectPositionInfo(self, objectName: "s") -> "s":  # noqa: F821, N802, N803
+        if self.broken is not None:
+            return self.broken
+        entry = self._find(objectName)
+        if entry is None:
+            return "<xml></xml>"
+        return (
+            "<object>"
+            f"<Name>{entry.name}</Name>"
+            f"<AltAz_JD>{self.julian_date:.3f}</AltAz_JD>"
+            f"<RA_Degrees>{entry.ra_degrees}</RA_Degrees>"
+            f"<Dec_Degrees>{entry.dec_degrees}</Dec_Degrees>"
+            "</object>"
+        )
+
+    @method()
+    def getObjectDataXML(self, objectName: "s") -> "s":  # noqa: F821, N802, N803
+        if self.broken is not None:
+            return self.broken
+        entry = self._find(objectName)
+        if entry is None:
+            return "<xml></xml>"
+        return (
+            "<object>"
+            f"<Name>{entry.name}</Name>"
+            f"<Type>{entry.type_name}</Type>"
+            f"<RA_Degrees>{entry.ra_degrees}</RA_Degrees>"
+            f"<Dec_Degrees>{entry.dec_degrees}</Dec_Degrees>"
+            "</object>"
+        )
 
 
 class MinimalMountInterface(ServiceInterface):
@@ -217,6 +359,7 @@ class FakeKStars:
             )
         )
         self.indi = FakeIndiInterface()
+        self.kstars = FakeKStarsInterface()
         self.mount: ServiceInterface = (
             MinimalMountInterface() if minimal_mount else FakeMountInterface()
         )
@@ -229,6 +372,7 @@ class FakeKStars:
         self._bus.export(EKOS_PATH, self.ekos)
         if not self._minimal:
             self._bus.export(INDI_PATH, self.indi)
+            self._bus.export(KSTARS_PATH, self.kstars)
         await self._bus.request_name(KSTARS_BUS_NAME)
 
     def _export_modules(self) -> None:

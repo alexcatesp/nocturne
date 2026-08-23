@@ -30,9 +30,16 @@ from typing import Final, final
 from nocturne.safety.commands import (
     AbortMotion,
     Command,
+    MountReport,
     ParkMount,
+    ResetMountModel,
+    ResolvedTarget,
+    SetMeridianFlipOffset,
     SetProperty,
     SlewToCoordinates,
+    SlewToTarget,
+    SyncToCoordinates,
+    SyncToTarget,
     UnparkMount,
 )
 from nocturne.safety.sky import SkyPosition
@@ -133,6 +140,32 @@ class ForbiddenMotion:
 Classification = PointingIntent | UnreadablePointing | ForbiddenMotion
 
 
+@final
+@dataclass(frozen=True, slots=True)
+class SyncIntent:
+    """A command that moves the mount's model of where it is.
+
+    Both positions, because a sync is only judgeable as a *pair*: how far it
+    moves the model is the whole question, and neither half answers it alone.
+    """
+
+    #: Where the command says the instrument actually is.
+    to: SkyPosition
+    #: Where the mount believed it was when the command was built.
+    reported: SkyPosition
+
+
+SyncClassification = SyncIntent | UnreadablePointing
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class ResolutionIntent:
+    """A command whose destination came from a name somebody else looked up."""
+
+    target: ResolvedTarget
+
+
 def pointing_intent(command: Command) -> Classification | None:
     """What ``command`` asks the mount to do, or ``None`` if it moves nothing.
 
@@ -146,18 +179,93 @@ def pointing_intent(command: Command) -> Classification | None:
             return _classify_property(name, values)
         case SlewToCoordinates(ra_hours=ra_hours, dec_deg=dec_deg):
             return _read_coordinates(ra_hours, dec_deg)
+        case SlewToTarget(target=target):
+            return _read_coordinates(target.ra_hours, target.dec_deg)
         case ParkMount() | UnparkMount() | AbortMotion():
             # None of the three names a place on the sky, so there is nothing
             # for the limits to be checked against. Why that is accepted rather
-            # than treated as a gap is ADR 0022; the short form is that park and
-            # abort are the safe state itself, and unpark commands no motion of
-            # its own.
+            # than treated as a gap is ADR 0022, kept by ADR 0023; the short
+            # form is that park and abort are the safe state itself, and unpark
+            # commands no motion of its own.
+            return None
+        case SyncToCoordinates() | SyncToTarget():
+            # A sync is an *observation*, not a destination: it says where the
+            # instrument already is. Running it through the pointing rules would
+            # refuse a sync precisely when the tube is somewhere it should not
+            # be — leaving the governor with a model it knows to be wrong, which
+            # is the worse of the two states. It is bounded by SYNC_RULES
+            # instead, on how far it moves the model (ADR 0023).
+            return None
+        case ResetMountModel() | SetMeridianFlipOffset():
+            # Neither names a place either. One discards the frame, the other
+            # configures when Ekos flips; MODEL_RULES and FLIP_RULES.
             return None
         case _:
             # ConnectDevice and DisconnectDevice. Connecting a driver does not
             # command motion; what the mount does on connect is the driver's
             # business and is bounded by MountLink's bring-up sequence.
             return None
+
+
+def sync_intent(command: Command) -> SyncClassification | None:
+    """How far ``command`` moves the mount's model, or ``None`` if it does not.
+
+    Answered explicitly for every command type the governor knows about, and
+    ``test_safety_sync_and_model.py`` asserts that, on the same grounds as
+    :func:`pointing_intent`: a command that quietly falls through to "moves no
+    model" is a command nobody decided about.
+    """
+    match command:
+        case SyncToCoordinates(ra_hours=ra_hours, dec_deg=dec_deg, reported=reported):
+            return _read_sync(ra_hours, dec_deg, reported)
+        case SyncToTarget(target=target, reported=reported):
+            return _read_sync(target.ra_hours, target.dec_deg, reported)
+        case _:
+            return None
+
+
+def resolution_intent(command: Command) -> ResolutionIntent | None:
+    """The name lookup behind ``command``, or ``None`` if it names no target."""
+    match command:
+        case SlewToTarget(target=target) | SyncToTarget(target=target):
+            return ResolutionIntent(target=target)
+        case _:
+            return None
+
+
+def mount_report(command: Command) -> MountReport | None:
+    """What the mount said about itself when ``command`` was built, if anything."""
+    match command:
+        case SyncToCoordinates(reported=reported):
+            return reported
+        case SyncToTarget(reported=reported):
+            return reported
+        case ResetMountModel(reported=reported):
+            return reported
+        case _:
+            return None
+
+
+def _read_sync(ra_hours: float, dec_deg: float, reported: MountReport) -> SyncClassification:
+    """Both halves of a sync as positions, or why one of them is not one."""
+    destination = _read_coordinates(ra_hours, dec_deg)
+    if not isinstance(destination, PointingIntent):
+        return (
+            destination
+            if isinstance(destination, UnreadablePointing)
+            else UnreadablePointing(detail="the sync destination is not a position on the sky")
+        )
+    origin = _read_coordinates(reported.ra_hours, reported.dec_deg)
+    if not isinstance(origin, PointingIntent):
+        return UnreadablePointing(
+            detail=(
+                "the mount reported a position that is not on the sky "
+                f"(RA {reported.ra_hours}, DEC {reported.dec_deg}), so how far this "
+                "sync would move its model cannot be computed. A sync is only safe "
+                "when it is small, and nothing here can say whether this one is"
+            )
+        )
+    return SyncIntent(to=destination.position, reported=origin.position)
 
 
 def _classify_property(name: str, values: Mapping[str, object]) -> Classification | None:
@@ -253,6 +361,12 @@ __all__ = [
     "Classification",
     "ForbiddenMotion",
     "PointingIntent",
+    "ResolutionIntent",
+    "SyncClassification",
+    "SyncIntent",
     "UnreadablePointing",
+    "mount_report",
     "pointing_intent",
+    "resolution_intent",
+    "sync_intent",
 ]

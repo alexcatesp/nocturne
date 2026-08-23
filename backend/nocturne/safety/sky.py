@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Final, final
 
 #: Julian date of the Unix epoch, 1970-01-01T00:00:00Z. Exact by definition.
@@ -132,6 +132,27 @@ def julian_date(when: datetime) -> float:
             "which second it is, and every angle below is a function of that"
         )
     return JULIAN_DATE_AT_UNIX_EPOCH + when.timestamp() / SECONDS_PER_DAY
+
+
+def datetime_from_julian_date(julian: float) -> datetime:
+    """The UTC instant of a Julian date. The inverse of :func:`julian_date`.
+
+    KStars reports its own clock as a Julian date and nothing else, so reading
+    it back requires this. ``test_safety_sky.py`` round-trips the pair and
+    checks both directions against astropy.
+
+    Raises:
+        ValueError: if the value is not a finite Julian date this side of a
+            plausible epoch. A NaN or a wild number arriving from a parsed
+            document must not become a timestamp that merely looks odd.
+    """
+    if not math.isfinite(julian):
+        raise ValueError(f"a Julian date must be a finite number, got {julian!r}")
+    seconds = (julian - JULIAN_DATE_AT_UNIX_EPOCH) * SECONDS_PER_DAY
+    try:
+        return datetime.fromtimestamp(seconds, tz=UTC)
+    except (OverflowError, OSError, ValueError) as exc:
+        raise ValueError(f"{julian!r} is not a representable Julian date: {exc}") from exc
 
 
 def greenwich_mean_sidereal_time_deg(when: datetime) -> float:

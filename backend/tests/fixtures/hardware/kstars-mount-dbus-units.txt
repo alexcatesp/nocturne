@@ -1,5 +1,5 @@
 ===== KStars Ekos Mount, DBus method documentation
-Source : kstars/ekos/mount/mount.h
+Source : kstars/ekos/mount/mount.h, mount.cpp, kstars/indi/indistd.h
 Repo   : https://invent.kde.org/education/kstars
          (read through the GitHub mirror https://github.com/KDE/kstars)
 Commit : 61d849b04c42217cf2f0ab956153e56a928ae8a8
@@ -15,12 +15,10 @@ ascension sent in degrees is accepted by the signature and points the telescope
 somewhere else entirely — the failure mode issue #2 exists to prevent, in a
 place introspection cannot reach.
 
-The doxygen comments below are the answer, copied verbatim from the source of
-the build that runs on the reference rig. Everything Nocturne calls is here,
-and so is everything it deliberately does not call (ADR 0022).
+And in one case the XML is not merely silent but WRONG. See part 2.
 
-Verbatim excerpt
-----------------
+Part 1 — the slew and sync family, verbatim from mount.h
+--------------------------------------------------------
         /** DBUS interface function.
              * Slew the mount to the RA/DEC (JNow).
              * @param RA Right ascention is hours.
@@ -120,14 +118,104 @@ Verbatim excerpt
 
         /** DBUS interface function.
 
+Part 2 — setMeridianFlipValues, where the XML's argument name is wrong
+----------------------------------------------------------------------
+The adaptor XML in kstars-dbus-interfaces.xml declares:
+
+        <method name="setMeridianFlipValues">
+            <arg name="activate" type="b" direction="in"/>
+            <arg name="hours" type="d" direction="in"/>
+            <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+        </method>
+
+The argument is named `hours`. It is in DEGREES. From mount.h:
+
+
+        /**
+         * @brief set meridian flip activation and hours
+         * @param activate true iff the meridian flip should be executed
+         * @param degrees angle past the meridian when the flip should be delayed
+         */
+        void setMeridianFlipValues(bool activate, double degrees);
+
+The brief says "hours", the @param says "degrees", the parameter is named
+`degrees`, and the implementation in mount.cpp puts it straight into a widget
+called meridianFlipOffsetDegrees:
+
+    void Mount::setMeridianFlipValues(bool activate, double degrees)
+    {
+        executeMeridianFlip->setChecked(activate);
+        meridianFlipOffsetDegrees->setValue(degrees);
+    }
+
+and meridianflipstate.cpp divides by fifteen when it uses it, which settles the
+question beyond argument:
+
+    // get the time after the meridian that the flip is called for (Degrees --> Hours)
+    double offset = rangeHA(m_offset / 15.0);
+    ...
+    hrsToFlip = offset + getFlipDelayHrs() - ha;
+
+So the offset is an HOUR ANGLE IN DEGREES, positive west of the meridian, and
+the flip fires when the mount's hour angle reaches it. Sending 1.0 meaning "one
+hour past the meridian" configures one degree — four minutes — instead.
+
+Part 3 — ISD::ParkStatus, from kstars/indi/indistd.h
+-----------------------------------------------------
+The `parkStatus` property is declared as a bare `i`, annotated only with the
+Qt type name. The values are:
+
+    typedef enum { PARK_UNKNOWN, PARK_PARKED, PARK_PARKING, PARK_UNPARKING,
+                   PARK_UNPARKED, PARK_ERROR } ParkStatus;
+
+PARK_PARKED is 1. PARK_UNKNOWN is 0, and it is what the property reads before
+the driver has reported anything, so it must never be treated as parked.
+
+Part 4 — the catalogue lookup, from kstars/kstarsdbus.cpp
+-----------------------------------------------------------
+getObjectPositionInfo(objectName) returns a document whose coordinates are in
+DEGREES, while Mount.slew takes RA in HOURS. The same factor of fifteen, at the
+other end of the same operation:
+
+    stream.writeTextElement("AltAz_JD", QString::number(data()->ut().djd(), 'f', 3));
+    stream.writeTextElement("RA_Degrees", QString::number(target->ra().Degrees()));
+    stream.writeTextElement("Dec_Degrees", QString::number(target->dec().Degrees()));
+
+Two further consequences worth having in writing:
+
+  - AltAz_JD is KStars' own clock, and it is printed to three decimal places of
+    a Julian day. That is a resolution of 86.4 seconds, which is the floor under
+    limits.targeting.resolver_max_clock_skew_s.
+  - The name is looked up with data()->objectNamed(), and Mount::gotoTarget uses
+    skyComposite()->findByName() — the same in-process catalogue. gotoTarget is
+    literally a lookup followed by slew:
+
+        bool Mount::gotoTarget(const QString &target)
+        {
+            auto object = KStarsData::Instance()->skyComposite()->findByName(target, false);
+            if (object != nullptr)
+            {
+                object->updateCoordsNow(KStarsData::Instance()->updateNum());
+                return slew(object->ra().Hours(), object->dec().Degrees());
+            }
+            return false;
+        }
+
+getObjectDataXML(objectName) returns the same coordinates plus the object type:
+
+    stream.writeTextElement("Type", target->typeName());
+
+Both return the literal string "<xml></xml>" for a name they cannot resolve.
+
 What Nocturne takes from this
 -----------------------------
-- slew(RA, DEC): RA in HOURS, DEC in DEGREES, frame JNow (equinox of date).
-  The same units and the same frame as INDI's EQUATORIAL_EOD_COORD and as
-  nocturne.safety.sky.SkyPosition, so no conversion happens anywhere.
+- slew(RA, DEC) and sync(RA, DEC): RA in HOURS, DEC in DEGREES, frame JNow
+  (equinox of date). The same units and frame as INDI's EQUATORIAL_EOD_COORD
+  and as nocturne.safety.sky.SkyPosition, so no conversion happens anywhere.
+- equatorialCoords reads back in the same units, in the same order.
 - The bool every one of them returns means "the command is sent successfully",
   not that the mount accepted it and not that the motion finished.
-- gotoTarget and syncTarget take a name KStars resolves internally. The
-  governor never sees a coordinate, so it cannot check one. Refused (ADR 0022).
-- resetModel discards the mount's alignment model, which is the frame the
-  meridian band is measured in. Refused (ADR 0022).
+- setMeridianFlipValues takes DEGREES. Nocturne names its argument offset_deg.
+- getObjectPositionInfo returns DEGREES. Nocturne divides by fifteen at that
+  boundary and nowhere else.
+- parkStatus == 1 means parked. Nothing else does.

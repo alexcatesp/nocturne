@@ -41,22 +41,51 @@ FAST = IndiSettings(
     reconnect_max_delay_s=0.05,
 )
 
+#: Positional and keyword arguments to call one method with.
+ArgumentSet = tuple[tuple[object, ...], dict[str, object]]
+
 #: Public methods of Executor that change instrument state, with the arguments
 #: to call each one with. Every one of them must be shown to pass through the
 #: governor, and ``test_every_mutating_method_is_accounted_for`` fails if a new
 #: one is added to the class without being added here.
-MUTATING_METHODS: dict[str, tuple[object, ...]] = {
-    "connect_device": (DEVICE,),
-    "disconnect_device": (DEVICE,),
-    "set_property": (DEVICE, POSITION, {ELEMENT: 1.0}),
+MUTATING_METHODS: dict[str, ArgumentSet] = {
+    "connect_device": ((DEVICE,), {}),
+    "disconnect_device": ((DEVICE,), {}),
+    "set_property": ((DEVICE, POSITION, {ELEMENT: 1.0}), {}),
     # The mount commands. The executor in this file has no Ekos bridge, which is
     # the point: a mount command must reach the governor before it discovers
     # there is nothing to send it to.
-    "slew": (5.0, 20.0),
-    "park": (),
-    "unpark": (),
-    "abort_motion": (),
+    "slew": ((5.0, 20.0), {}),
+    "park": ((), {}),
+    "unpark": ((), {}),
+    "abort_motion": ((), {}),
+    # The four that read the mount, or the catalogue, before they can build a
+    # command at all. Without a bridge they fail at that first read — which is
+    # *earlier* than the governor, so these four are exempted from the
+    # consulted-the-governor sweep below and covered end to end instead, where
+    # there is a mount to read. They are still listed here, because the point of
+    # this mapping is that no public mutating method is unaccounted for.
+    "sync": ((5.0, 20.0), {}),
+    "slew_to_target": (("M 31",), {}),
+    "sync_to_target": (("M 31",), {}),
+    "reset_mount_model": ((), {}),
+    "set_meridian_flip": ((), {"enabled": False}),
 }
+
+#: The subset of the above that can be shown to consult the governor without a
+#: mount attached. The rest need one before there is a command to validate; that
+#: they consult it is asserted in
+#: ``tests/integration/test_mount_commands_end_to_end.py``, against a mount.
+MUTATING_METHODS_WITHOUT_A_MOUNT = (
+    "connect_device",
+    "disconnect_device",
+    "set_property",
+    "slew",
+    "park",
+    "unpark",
+    "abort_motion",
+    "set_meridian_flip",
+)
 
 
 class GovernorSpy:
@@ -131,7 +160,7 @@ class TestEveryCommandIsValidated:
         assert isinstance(governor.seen[0], SetProperty)
         assert governor.seen[0].values == {ELEMENT: 1234.0}
 
-    @pytest.mark.parametrize("method_name", sorted(MUTATING_METHODS))
+    @pytest.mark.parametrize("method_name", sorted(MUTATING_METHODS_WITHOUT_A_MOUNT))
     async def test_no_mutating_method_bypasses_the_governor(
         self, executor: Executor, governor: GovernorSpy, method_name: str
     ) -> None:
@@ -144,9 +173,10 @@ class TestEveryCommandIsValidated:
         being tested is the assertion below, which fails for a method that
         reached either outcome without consulting the governor at all.
         """
+        arguments, keywords = MUTATING_METHODS[method_name]
         governor.seen.clear()
         with contextlib.suppress(SafetyViolation, EkosError):
-            await getattr(executor, method_name)(*MUTATING_METHODS[method_name])
+            await getattr(executor, method_name)(*arguments, **keywords)
         assert governor.seen, f"{method_name} did not consult the governor"
 
     async def test_that_check_would_catch_a_method_that_skipped_the_gate(
@@ -176,8 +206,30 @@ class TestEveryCommandIsValidated:
 
     def test_the_method_inventory_is_not_empty(self) -> None:
         """A comparison of two empty sets proves nothing about either."""
-        assert len(MUTATING_METHODS) >= 7
+        assert len(MUTATING_METHODS) >= 12
         assert "slew" in MUTATING_METHODS
+
+    def test_every_method_checked_here_is_one_of_them(self) -> None:
+        """The exempted subset is a subset, not a second list that drifted."""
+        assert set(MUTATING_METHODS_WITHOUT_A_MOUNT) <= set(MUTATING_METHODS)
+
+    def test_the_exemptions_are_covered_somewhere_else(self) -> None:
+        """A method exempted here and nowhere else is a method nothing checks.
+
+        The end-to-end suite has a real bridge and a real mount to read, so it
+        is where the remaining four are shown to pass through the governor.
+        This asserts the file names them, which is what makes the exemption a
+        division of labour rather than a hole.
+        """
+        exempted = set(MUTATING_METHODS) - set(MUTATING_METHODS_WITHOUT_A_MOUNT)
+        assert exempted, "nothing is exempted, so this test proves nothing"
+        end_to_end = (
+            Path(inspect.getfile(Executor)).resolve().parents[2]
+            / "tests/integration/test_mount_commands_end_to_end.py"
+        )
+        source = end_to_end.read_text(encoding="utf-8")
+        for method_name in sorted(exempted):
+            assert f"executor.{method_name}(" in source, method_name
 
 
 class TestRejectionStopsTheCommand:

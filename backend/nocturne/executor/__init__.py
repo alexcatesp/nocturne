@@ -9,15 +9,19 @@ from __future__ import annotations
 from .ekos import (
     EKOS_MOUNT_INTERFACE,
     EKOS_MOUNT_PATH,
-    FORBIDDEN_MOUNT_METHODS,
+    KSTARS_INTERFACE,
+    KSTARS_PATH,
+    PARK_STATUS_PARKED,
+    REQUIRED_KSTARS_METHODS,
     REQUIRED_MOUNT_METHODS,
+    REQUIRED_MOUNT_PROPERTIES,
     BridgeState,
     EkosBridge,
     EkosError,
     EkosInterfaceError,
     EkosUnavailableError,
 )
-from .executor import CommandResult, Executor
+from .executor import CommandResult, Executor, UnknownTargetError
 from .indi.client import (
     ConnectionState,
     DeviceAppeared,
@@ -44,8 +48,12 @@ from .settings import EkosSettings, IndiSettings
 __all__ = [
     "EKOS_MOUNT_INTERFACE",
     "EKOS_MOUNT_PATH",
-    "FORBIDDEN_MOUNT_METHODS",
+    "KSTARS_INTERFACE",
+    "KSTARS_PATH",
+    "PARK_STATUS_PARKED",
+    "REQUIRED_KSTARS_METHODS",
     "REQUIRED_MOUNT_METHODS",
+    "REQUIRED_MOUNT_PROPERTIES",
     "BridgeState",
     "CommandResult",
     "ConnectionState",
@@ -72,4 +80,5 @@ __all__ = [
     "ServerConnected",
     "ServerDisconnected",
     "SwitchRule",
+    "UnknownTargetError",
 ]

@@ -21,12 +21,59 @@ without an ``Approval``.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import ConfigDict
 
 from nocturne.schemas import StrictModel
 
 #: A property element value as carried by the INDI protocol.
 PropertyValue = float | str | bool
+
+
+class MountReport(StrictModel):
+    """What the mount says about itself, at the instant a command was built.
+
+    Three commands cannot be judged without it — a sync, which is only safe if
+    it is *small*, and a model reset, which is only safe if the mount is
+    parked — and none of the three can be judged by the governor alone, because
+    the governor holds no live state and is not going to start.
+
+    So the state travels **with the command**. The executor reads it from the
+    driver when it builds the command, the governor validates the pair, and the
+    decision stays exactly what SPEC section 9 asks a decision to be:
+    reproducible from its own log line, with nothing behind it that could have
+    changed in between (ADR 0023).
+    """
+
+    ra_hours: float
+    dec_deg: float
+    parked: bool
+
+
+class ResolvedTarget(StrictModel):
+    """A target named by the operator or the agent, after KStars resolved it.
+
+    A name is not a place. ``Mount.gotoTarget("M31")`` looks the name up inside
+    KStars and slews to whatever comes back, which means the governor is handed
+    a string and asked to approve a destination it cannot see. Resolving first
+    and validating the coordinates turns it back into an ordinary pointing
+    decision.
+
+    ``resolved_at`` is **KStars' clock**, not Nocturne's, and it is carried
+    because they can differ: KStars precesses to the instant its own simulated
+    clock reads, and that clock can be stopped or moved with nothing looking
+    wrong. ``object_type`` is carried because a name may resolve to something
+    that does not hold still, and a position validated now for a body that moves
+    is a position validated for the wrong time (SPEC section 1.2 puts those out
+    of scope anyway).
+    """
+
+    name: str
+    ra_hours: float
+    dec_deg: float
+    object_type: str
+    resolved_at: datetime
 
 
 class Command(StrictModel):
@@ -94,7 +141,8 @@ class ParkMount(Command):
     """Drive the mount to its park position and hold it there.
 
     Carries no pointing rules, and that is a decision rather than an omission
-    (ADR 0022). Parking is the terminal safe action of SPEC section 8.5: every
+    (ADR 0022, kept by ADR 0023). Parking is the terminal safe action of SPEC
+    section 8.5: every
     degradation path ends here, so a rule that could refuse a park would make
     the safe state unreachable exactly when it is needed.
     """
@@ -108,7 +156,8 @@ class UnparkMount(Command):
 
     Names no destination, so there is nothing for the pointing rules to check;
     ADR 0022 sets out why that is accepted rather than papered over, and what
-    the session layer owes on top of it.
+    the session layer owes on top of it; ADR 0023 kept it when it gave every
+    other call on this interface a rule.
     """
 
     def describe(self) -> str:
@@ -125,3 +174,103 @@ class AbortMotion(Command):
 
     def describe(self) -> str:
         return "abort mount motion"
+
+
+class SyncToCoordinates(Command):
+    """Tell the mount it is at this equatorial position, equinox of date.
+
+    A sync moves nothing. It moves the mount's *model* of where it is, which is
+    the frame the altitude, Sun and meridian limits are all measured in — so
+    the danger is not motion now, it is every slew afterwards being computed
+    against a rotated sky.
+
+    It is bounded rather than refused (ADR 0023): the position synced to must be
+    within ``limits.targeting.sync_tolerance_deg`` of the position the mount
+    reports. That is the check that separates a plate solve correcting a cold
+    mount's pointing error from a solve that landed on the wrong field.
+    """
+
+    ra_hours: float
+    dec_deg: float
+    reported: MountReport
+
+    def describe(self) -> str:
+        return (
+            f"sync to RA {self.ra_hours:.5f} h, DEC {self.dec_deg:+.4f} deg "
+            f"(mount reports RA {self.reported.ra_hours:.5f} h, "
+            f"DEC {self.reported.dec_deg:+.4f} deg)"
+        )
+
+
+class SlewToTarget(Command):
+    """Slew to a target named rather than pointed at.
+
+    Carries the resolved coordinates, so the governor validates a place on the
+    sky exactly as it validates :class:`SlewToCoordinates` — and additionally
+    checks that the resolution is fresh and that the object holds still.
+    """
+
+    target: ResolvedTarget
+
+    def describe(self) -> str:
+        return (
+            f"slew to {self.target.name} at RA {self.target.ra_hours:.5f} h, "
+            f"DEC {self.target.dec_deg:+.4f} deg"
+        )
+
+
+class SyncToTarget(Command):
+    """Tell the mount it is pointing at a named target.
+
+    The startup alignment a rough polar align ends with. It is a sync and a
+    resolution at once, and carries the rules of both.
+    """
+
+    target: ResolvedTarget
+    reported: MountReport
+
+    def describe(self) -> str:
+        return (
+            f"sync to {self.target.name} at RA {self.target.ra_hours:.5f} h, "
+            f"DEC {self.target.dec_deg:+.4f} deg (mount reports RA "
+            f"{self.reported.ra_hours:.5f} h, DEC {self.reported.dec_deg:+.4f} deg)"
+        )
+
+
+class ResetMountModel(Command):
+    """Discard the mount's alignment model.
+
+    The most complete way to move the frame: not "you are somewhere else" but
+    "forget everything you knew about where you are". Permitted only with the
+    mount parked, because a parked mount is at a position the driver knows
+    independently of the model being discarded — so there is a defined state on
+    the other side of the operation rather than an unknown one (ADR 0023).
+    """
+
+    reported: MountReport
+
+    def describe(self) -> str:
+        return "reset the mount's alignment model"
+
+
+class SetMeridianFlipOffset(Command):
+    """Configure Ekos' own automatic meridian flip.
+
+    ``offset_deg`` is the hour angle, **in degrees**, at which Ekos flips —
+    positive west of the meridian, negative east of it. Degrees despite the
+    argument being named ``hours`` in KStars' own DBus definition; that defect
+    is recorded in ``kstars-mount-dbus-units.txt`` and is why this field is
+    named for what it is.
+
+    Enabling it makes Ekos a second thing deciding when to flip, beside the
+    governor. The rule that makes that safe is that Ekos must flip **before**
+    the tube reaches the governor's keep-out band, never after (ADR 0023).
+    """
+
+    enabled: bool
+    offset_deg: float
+
+    def describe(self) -> str:
+        if not self.enabled:
+            return "disable the Ekos meridian flip"
+        return f"flip at hour angle {self.offset_deg:+.1f} deg, in Ekos"

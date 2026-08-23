@@ -43,13 +43,13 @@ Ekos-level lifecycle: is Ekos up, are the devices connected, and the module
 objects Ekos creates when it starts.
 
 **The mount module is attached; the others are not yet.** ``Mount`` is here
-because M2's first moving parts need it, and the four calls Nocturne makes on it
-are gated by the safety governor like everything else that moves the
-instrument. ``Align``, ``Focus``, ``Guide`` and ``Capture`` arrive with the work
-that uses them, each with its own commands in :mod:`nocturne.safety.commands`;
-until then this module does not name them, and a structural test in
-``test_ekos_recorded_interface.py`` keeps it that way. Which of the mount
-module's own methods are deliberately *not* called is ADR 0022.
+because M2's first moving parts need it, and **every one of the nine methods it
+exports** is driven through a command the safety governor sees first — the five
+ADR 0022 refused are bounded by rules of their own instead (ADR 0023).
+``Align``, ``Focus``, ``Guide`` and ``Capture`` arrive with the work that uses
+them, each with its own commands in :mod:`nocturne.safety.commands`; until then
+this module does not name them, and a structural test in
+``test_ekos_recorded_interface.py`` keeps it that way.
 """
 
 from __future__ import annotations
@@ -57,6 +57,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
+import xml.etree.ElementTree as ElementTree
 from collections.abc import Callable, Mapping, Sequence
 from enum import StrEnum
 from types import TracebackType
@@ -66,6 +68,8 @@ from dbus_next import BusType, Message, MessageType
 from dbus_next.aio import MessageBus, ProxyInterface
 
 from nocturne.executor.settings import EkosSettings
+from nocturne.safety.commands import ResolvedTarget
+from nocturne.safety.sky import DEGREES_PER_HOUR, datetime_from_julian_date
 
 logger = logging.getLogger("nocturne.executor.ekos")
 
@@ -99,30 +103,66 @@ REQUIRED_INDI_METHODS: Final[frozenset[str]] = frozenset(
 EKOS_MOUNT_PATH: Final = "/KStars/Ekos/Mount"
 EKOS_MOUNT_INTERFACE: Final = "org.kde.kstars.Ekos.Mount"
 
-#: The mount methods the bridge calls, checked by introspection when the module
-#: is attached and checked against the recorded interface in CI.
+#: The mount methods the bridge calls: **every one the module declares**.
 #:
-#: The four here are the whole of what Nocturne asks the mount module for, and
-#: which of the nine it declares are deliberately absent — ``gotoTarget``,
-#: ``syncTarget``, ``sync``, ``resetModel`` and ``setMeridianFlipValues`` — is
-#: ADR 0022, enforced by ``test_ekos_recorded_interface.py`` rather than left to
-#: memory.
-REQUIRED_MOUNT_METHODS: Final[frozenset[str]] = frozenset({"slew", "park", "unpark", "abort"})
+#: ADR 0022 called four of them and refused five. ADR 0023 supersedes that at the
+#: operator's decision: all nine are driven, and each of the five that was
+#: refused carries a rule of its own instead of a refusal — a sync is bounded by
+#: how far it moves the mount's model, a named target is resolved and its
+#: coordinates validated before anything moves, a model reset requires a parked
+#: mount, and Ekos' own flip must fire before the governor's keep-out band
+#: rather than after.
+#:
+#: ``test_ekos_recorded_interface.py`` asserts this set is exactly the recorded
+#: interface, so a KStars release that adds a method fails the suite rather than
+#: leaving a call nobody decided about.
+REQUIRED_MOUNT_METHODS: Final[frozenset[str]] = frozenset(
+    {
+        "slew",
+        "sync",
+        "gotoTarget",
+        "syncTarget",
+        "park",
+        "unpark",
+        "abort",
+        "resetModel",
+        "setMeridianFlipValues",
+    }
+)
 
-#: Mount-module methods Nocturne must not call, and the reason in one line each.
-#: Named here so that the structural test has something to check the source
-#: against; see ADR 0022 for the argument.
-FORBIDDEN_MOUNT_METHODS: Final[Mapping[str, str]] = {
-    "gotoTarget": "resolves a target name inside KStars, so the governor never sees "
-    "the coordinates it would have to check",
-    "syncTarget": "the same, and it moves the frame every limit is measured in",
-    "sync": "moves the mount's model of where it is; plate-solve syncs belong to the "
-    "align module, with the solved position in hand",
-    "resetModel": "discards the mount's alignment model, which is the frame the "
-    "meridian band is expressed in",
-    "setMeridianFlipValues": "would make Ekos a third actor deciding when to flip, "
-    "beside the governor and the driver limits of ADR 0010",
-}
+#: Mount-module properties the bridge reads. Reads are not commands and are not
+#: gated — but two of them are what make three of the commands *judgeable* at
+#: all, so they are named and checked against the recording like the methods.
+REQUIRED_MOUNT_PROPERTIES: Final[frozenset[str]] = frozenset({"equatorialCoords", "parkStatus"})
+
+#: ``ISD::ParkStatus``, from ``kstars/indi/indistd.h`` at the pinned commit:
+#: ``{PARK_UNKNOWN, PARK_PARKED, PARK_PARKING, PARK_UNPARKING, PARK_UNPARKED,
+#: PARK_ERROR}``. The DBus type is a bare ``i`` and the introspection XML says
+#: only ``ISD::Mount::ParkStatus``, so the value is recorded here and in
+#: ``kstars-mount-dbus-units.txt`` rather than counted from memory.
+#:
+#: **Only this one value means parked.** Everything else — including
+#: ``PARK_UNKNOWN``, which is what the property reads before the driver has said
+#: anything — means not parked, because a model reset against an unknown state
+#: is the thing ``require_the_mount_to_be_parked`` exists to prevent.
+PARK_STATUS_PARKED: Final = 1
+
+#: The main KStars object. Not Ekos': it exists from the moment KStars starts,
+#: and it is where the sky catalogue lives.
+KSTARS_PATH: Final = "/KStars"
+KSTARS_INTERFACE: Final = "org.kde.kstars"
+
+#: What the bridge asks the catalogue for. ``getObjectPositionInfo`` returns a
+#: position precessed to KStars' *current* clock, and reports that clock beside
+#: it; ``getObjectDataXML`` reports the object's type, which is how a body that
+#: does not hold still is caught before it becomes a slew (SPEC section 1.2).
+REQUIRED_KSTARS_METHODS: Final[frozenset[str]] = frozenset(
+    {"getObjectPositionInfo", "getObjectDataXML"}
+)
+
+#: What KStars returns from a lookup it could not resolve. Not an error and not
+#: an empty string: a well-formed document with nothing in it.
+UNRESOLVED_OBJECT_XML: Final = "<xml></xml>"
 
 _DBUS_SERVICE: Final = "org.freedesktop.DBus"
 _DBUS_PATH: Final = "/org/freedesktop/DBus"
@@ -188,14 +228,75 @@ async def close_bus(bus: MessageBus) -> None:
                 resource.close()
 
 
+def _object_fields(document: str, name: str) -> dict[str, str]:
+    """The text elements of one of KStars' object documents, flattened.
+
+    Both ``getObjectPositionInfo`` and ``getObjectDataXML`` return a single
+    element with one level of text children, so a dictionary is the whole of the
+    structure.
+
+    Raises:
+        EkosError: if the document does not parse, or carries no fields. An
+            empty mapping would make every lookup below report a missing field
+            rather than a broken answer, and those want different fixes.
+    """
+    # S314: the input comes from KStars over the session bus, which is the same
+    # trust boundary as every other call in this module. defusedxml would be a
+    # new dependency and therefore an ADR (CLAUDE.md section 6).
+    try:
+        root = ElementTree.fromstring(document)  # noqa: S314
+    except ElementTree.ParseError as exc:
+        raise EkosError(
+            f"KStars answered the lookup for {name!r} with something that is not XML: {exc}"
+        ) from exc
+    fields = {
+        child.tag: (child.text or "").strip() for child in root if isinstance(child.tag, str)
+    }
+    if not fields:
+        raise EkosError(
+            f"KStars answered the lookup for {name!r} with an empty document. It "
+            "returns one for a name it does not know, and this is not that — so the "
+            "shape of the answer has changed."
+        )
+    return fields
+
+
+def _field_float(fields: Mapping[str, str], key: str, name: str) -> float:
+    """One numeric field, or an error naming the field and the target."""
+    raw = fields.get(key)
+    if raw is None:
+        raise EkosError(
+            f"KStars' answer for {name!r} carries no {key}. This is the document "
+            "getObjectPositionInfo is documented to return; it no longer is."
+        )
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise EkosError(f"{key} for {name!r} is {raw!r}, which is not a number") from exc
+
+
+#: dbus-next converts a DBus member name to the Python accessor it generates
+#: with these two substitutions, in this order. They are copied from
+#: ``dbus_next.proxy_object.BaseProxyInterface``, and
+#: ``test_ekos_recorded_interface.py`` asserts this module agrees with it over
+#: every member name in the recorded interface rather than over an example.
+#:
+#: **Runs of capitals are why this is not a one-line loop.** A rule that
+#: inserted an underscore before every capital turns ``getObjectDataXML`` into
+#: ``get_object_data_x_m_l``; dbus-next keeps the run together and produces
+#: ``get_object_data_xml``. Every member the bridge called before that one
+#: happened to have no capital run, so the naive version was correct for
+#: everything it was ever asked and wrong for the first name with an acronym in
+#: it — which surfaced as "not available on this KStars build" for a method
+#: KStars plainly has.
+_SNAKE_BEFORE_WORD = re.compile(r"(.)([A-Z][a-z]+)")
+_SNAKE_BETWEEN = re.compile(r"([a-z0-9])([A-Z])")
+
+
 def _snake(member: str) -> str:
     """DBus member name to the accessor dbus-next generates for it."""
-    out: list[str] = []
-    for index, character in enumerate(member):
-        if character.isupper() and index:
-            out.append("_")
-        out.append(character.lower())
-    return "".join(out)
+    subbed = _SNAKE_BEFORE_WORD.sub(r"\1_\2", member)
+    return _SNAKE_BETWEEN.sub(r"\1_\2", subbed).lower()
 
 
 @final
@@ -217,6 +318,7 @@ class EkosBridge:
         self._bus: MessageBus | None = None
         self._ekos: ProxyInterface | None = None
         self._indi: ProxyInterface | None = None
+        self._kstars: ProxyInterface | None = None
         self._mount: ProxyInterface | None = None
         self._state = BridgeState.DISCONNECTED
         self._handlers: list[StateHandler] = []
@@ -310,6 +412,11 @@ class EkosBridge:
         self._indi = await self._interface(
             bus, INDI_PATH, INDI_INTERFACE, REQUIRED_INDI_METHODS
         )
+        # The catalogue. Unlike the module objects this exists from the moment
+        # KStars starts, so it attaches here rather than in attach_modules().
+        self._kstars = await self._interface(
+            bus, KSTARS_PATH, KSTARS_INTERFACE, REQUIRED_KSTARS_METHODS
+        )
         # A fresh KStars has not started Ekos, so whatever module proxies this
         # bridge held belong to a process that is gone. Dropping them here is
         # what makes a mount call after a restart raise rather than address a
@@ -335,6 +442,7 @@ class EkosBridge:
     async def _detach(self) -> None:
         self._ekos = None
         self._indi = None
+        self._kstars = None
         self._mount = None
         if self._bus is not None:
             await close_bus(self._bus)
@@ -357,7 +465,13 @@ class EkosBridge:
         return bool(reply.body[0])
 
     async def _interface(
-        self, bus: MessageBus, path: str, interface: str, required: frozenset[str]
+        self,
+        bus: MessageBus,
+        path: str,
+        interface: str,
+        required: frozenset[str],
+        *,
+        properties: frozenset[str] = frozenset(),
     ) -> ProxyInterface:
         try:
             introspection = await bus.introspect(KSTARS_BUS_NAME, path)
@@ -383,6 +497,16 @@ class EkosBridge:
                 f"It offers: {', '.join(sorted(offered_methods)) or '<nothing>'}. "
                 "Correct the constants in nocturne/executor/ekos.py for this KStars "
                 "release."
+            )
+        offered_properties = {item.name for item in node.properties}
+        missing_properties = sorted(properties - offered_properties)
+        if missing_properties:
+            raise EkosInterfaceError(
+                f"{interface} is missing the propert(ies) "
+                f"{', '.join(missing_properties)}. It offers: "
+                f"{', '.join(sorted(offered_properties)) or '<nothing>'}. Three mount "
+                "commands cannot be judged without these, so the bridge refuses to "
+                "attach rather than command a mount it cannot read."
             )
         proxy = bus.get_proxy_object(KSTARS_BUS_NAME, path, introspection)
         return proxy.get_interface(interface)
@@ -427,6 +551,7 @@ class EkosBridge:
                 logger.warning("KStars left the session bus")
                 self._ekos = None
                 self._indi = None
+                self._kstars = None
                 self._mount = None
                 self._set_state(BridgeState.RECONNECTING)
 
@@ -497,7 +622,11 @@ class EkosBridge:
         while True:
             try:
                 self._mount = await self._interface(
-                    bus, EKOS_MOUNT_PATH, EKOS_MOUNT_INTERFACE, REQUIRED_MOUNT_METHODS
+                    bus,
+                    EKOS_MOUNT_PATH,
+                    EKOS_MOUNT_INTERFACE,
+                    REQUIRED_MOUNT_METHODS,
+                    properties=REQUIRED_MOUNT_PROPERTIES,
                 )
             except EkosInterfaceError as exc:
                 last = exc
@@ -568,6 +697,25 @@ class EkosBridge:
     # any of them is through a command the safety governor has approved
     # (CLAUDE.md invariant 1, enforced by tests/unit/test_safety_boundaries.py).
 
+    def _kstars_interface(self) -> ProxyInterface:
+        """The main KStars object, or a refusal saying why it is not there."""
+        if not self.is_connected or self._kstars is None:
+            raise EkosError(
+                f"not connected to KStars; the bridge is {self._state.value}. "
+                "Call connect() first, or wait for KStars to come back."
+            )
+        return self._kstars
+
+    async def _get_property(self, interface: ProxyInterface, member: str) -> Any:
+        """Read a DBus property. The value type is dynamic, like ``_call``."""
+        getter = getattr(interface, f"get_{_snake(member)}", None)
+        if getter is None:
+            raise EkosInterfaceError(f"{member} is not readable on this KStars build")
+        try:
+            return await getter()
+        except Exception as exc:
+            raise EkosError(f"could not read {member}: {exc}") from exc
+
     def _mount_interface(self) -> ProxyInterface:
         """The mount module, or a refusal that says which step was skipped.
 
@@ -614,3 +762,143 @@ class EkosBridge:
     async def mount_abort(self) -> bool:
         """Stop the mount moving."""
         return bool(await self._call(self._mount_interface(), "abort"))
+
+    async def mount_sync(self, ra_hours: float, dec_deg: float) -> bool:
+        """Tell the mount it is at this equatorial position, equinox of date.
+
+        ``Mount.sync(RA: d, DEC: d) -> b``, the same units and frame as
+        :meth:`mount_slew` — hours, degrees, JNow. This moves nothing: it moves
+        the mount's model. Which is why the governor bounds how far.
+        """
+        sent = await self._call(
+            self._mount_interface(), "sync", float(ra_hours), float(dec_deg)
+        )
+        return bool(sent)
+
+    async def mount_goto_target(self, name: str) -> bool:
+        """Slew to a target KStars resolves by name.
+
+        The name is resolved a second time here, inside KStars, having already
+        been resolved by :meth:`resolve_target` for the governor to validate.
+        That is deliberate and it is not redundant: KStars' own lookup is what
+        actually decides where the mount goes, so what the governor approved has
+        to be what KStars will find — and the same in-process catalogue, asked
+        twice within a session, answers the same for the fixed objects
+        SPEC section 1.2 restricts this to. A body that does *not* hold still is
+        refused by the governor before reaching here, on the object type this
+        same catalogue reported.
+        """
+        return bool(await self._call(self._mount_interface(), "gotoTarget", name))
+
+    async def mount_sync_target(self, name: str) -> bool:
+        """Tell the mount it is pointing at a target KStars resolves by name."""
+        return bool(await self._call(self._mount_interface(), "syncTarget", name))
+
+    async def mount_reset_model(self) -> bool:
+        """Discard the mount's alignment model.
+
+        Returns false when the mount has no alignment model to discard, which
+        KStars checks before doing anything — so a false here is "nothing to
+        do", not "it failed". The distinction matters to a caller deciding
+        whether to retry.
+        """
+        return bool(await self._call(self._mount_interface(), "resetModel"))
+
+    async def mount_set_meridian_flip(self, enabled: bool, offset_deg: float) -> bool:
+        """Configure Ekos' own automatic meridian flip.
+
+        ``Mount.setMeridianFlipValues(activate: b, hours: d)`` — and the second
+        argument is **degrees**, not hours, despite that name. KStars' own
+        adaptor XML says ``hours``; the implementation names the parameter
+        ``degrees``, writes it into ``meridianFlipOffsetDegrees``, and divides by
+        fifteen when it uses it. The excerpt proving this is in
+        ``backend/tests/fixtures/hardware/kstars-mount-dbus-units.txt``, and it
+        is why this method's argument is named for the unit rather than for the
+        DBus signature.
+
+        Returns True once the call has been sent. The method is declared
+        ``NoReply`` in the adaptor, so there is nothing to report but that.
+        """
+        await self._call(
+            self._mount_interface(), "setMeridianFlipValues", bool(enabled), float(offset_deg)
+        )
+        return True
+
+    # ------------------------------------------------- reading the mount
+
+    # Not commands. These are what let the governor judge a sync and a model
+    # reset, by travelling with the command that needs them (ADR 0023).
+
+    async def mount_equatorial_coords(self) -> tuple[float, float]:
+        """Where the mount says it is: ``(RA hours, DEC degrees)``, JNow.
+
+        KStars documents the order and the units on ``equatorialCoords``: "First
+        element is RA in hours. Second elements is DEC in degrees."
+
+        Raises:
+            EkosError: if the mount answers with anything but two numbers. A
+                pair that cannot be read is not defaulted to zero — that is a
+                real position, on the celestial equator at the vernal equinox,
+                and a sync measured against it would look small from some parts
+                of the sky and enormous from others.
+        """
+        raw = await self._get_property(self._mount_interface(), "equatorialCoords")
+        try:
+            ra_hours, dec_deg = (float(value) for value in raw)
+        except (TypeError, ValueError) as exc:
+            raise EkosError(
+                f"the mount reported its position as {raw!r}, which is not a right "
+                f"ascension in hours and a declination in degrees: {exc}"
+            ) from exc
+        return ra_hours, dec_deg
+
+    async def mount_is_parked(self) -> bool:
+        """Whether the mount reports itself parked, and only that.
+
+        ``PARK_PARKING``, ``PARK_UNPARKING``, ``PARK_ERROR`` and the
+        ``PARK_UNKNOWN`` the property holds before the driver has said anything
+        all answer False. Parked is a state to be *in*, not one to be heading
+        towards.
+        """
+        raw = await self._get_property(self._mount_interface(), "parkStatus")
+        return int(raw) == PARK_STATUS_PARKED
+
+    # ------------------------------------------------------ the catalogue
+
+    async def resolve_target(self, name: str) -> ResolvedTarget | None:
+        """Look ``name`` up in KStars' catalogue, or ``None`` if it is not there.
+
+        Two calls, because one document does not carry both halves: the position
+        precessed to now, and the type of thing it is. Both are needed before a
+        name may become a slew — the position so the governor has a place to
+        validate, the type so a body that moves against the stars is refused
+        rather than approved for an instant that has passed by the time the
+        mount arrives.
+
+        The instant KStars precessed to comes back with the position, and it is
+        **KStars' clock**, not this process's. That is the point of carrying it:
+        KStars' clock is simulated and can be stopped or moved, and a position
+        precessed to the wrong instant looks exactly like a correct one.
+
+        Raises:
+            EkosError: if KStars answers with something that is not the document
+                it documents.
+        """
+        position = await self._call(self._kstars_interface(), "getObjectPositionInfo", name)
+        if not position or str(position).strip() == UNRESOLVED_OBJECT_XML:
+            logger.info("KStars does not know %r", name, extra={"target": name})
+            return None
+        data = await self._call(self._kstars_interface(), "getObjectDataXML", name)
+        fields = _object_fields(str(position), name) | {
+            f"Data_{key}": value for key, value in _object_fields(str(data), name).items()
+        }
+        return ResolvedTarget(
+            name=fields.get("Name", name),
+            # RA_Degrees, not hours: KStars reports this document in degrees and
+            # takes Mount.slew in hours. Converting here, at the one boundary
+            # the two meet, is the whole reason this is not a straight copy.
+            ra_hours=_field_float(fields, "RA_Degrees", name) / DEGREES_PER_HOUR,
+            dec_deg=_field_float(fields, "Dec_Degrees", name),
+            object_type=fields.get("Data_Type", ""),
+            resolved_at=datetime_from_julian_date(_field_float(fields, "AltAz_JD", name)),
+        )

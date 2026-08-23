@@ -26,6 +26,7 @@ something known to be wrong (CLAUDE.md section 2).
 from __future__ import annotations
 
 import inspect
+from collections.abc import Callable
 from typing import Final
 
 import pytest
@@ -437,7 +438,7 @@ class TestTheMountModuleTheBridgeDrives:
 
     def test_the_required_set_is_not_empty(self) -> None:
         """An empty set has no missing members either."""
-        assert len(ekos.REQUIRED_MOUNT_METHODS) == 4
+        assert len(ekos.REQUIRED_MOUNT_METHODS) == 9
         assert "slew" in ekos.REQUIRED_MOUNT_METHODS
 
     def test_a_mount_method_kstars_does_not_have_is_reported_missing(self) -> None:
@@ -460,53 +461,127 @@ class TestTheMountModuleTheBridgeDrives:
         assert overloads[0].out_signature == "b"
 
 
-class TestTheMountMethodsNocturneRefusesToCall:
-    """ADR 0022, kept where a later refactor cannot quietly undo it."""
+class TestTheBridgeDrivesTheWholeMountInterface:
+    """ADR 0023 replaced a partition with a covering, and this is the covering.
 
-    def test_each_one_really_is_offered_by_kstars(self) -> None:
-        """Otherwise "we do not call it" would be true for the wrong reason.
+    ADR 0022 called four of the nine methods and refused five by name. The
+    operator's decision was that all nine be implemented, each with a rule
+    rather than a refusal — so what has to hold now is that
+    ``REQUIRED_MOUNT_METHODS`` *is* the recorded interface, exactly. Not a
+    subset, which would leave a call nobody decided about, and not a superset,
+    which would be a name KStars does not have.
+    """
 
-        A forbidden list naming methods KStars does not have would pass the
-        source check below while forbidding nothing at all.
-        """
-        missing = sorted(set(ekos.FORBIDDEN_MOUNT_METHODS) - mount().method_names())
+    def test_it_is_exactly_what_kstars_declares(self) -> None:
+        assert mount().method_names() == ekos.REQUIRED_MOUNT_METHODS
+
+    def test_that_is_nine_methods(self) -> None:
+        """Two empty sets are equal too."""
+        assert len(ekos.REQUIRED_MOUNT_METHODS) == 9
+
+    def test_the_five_that_used_to_be_refused_are_among_them(self) -> None:
+        """Named, so that a later edit dropping one is a failure and not a diff."""
+        assert {
+            "sync",
+            "syncTarget",
+            "gotoTarget",
+            "resetModel",
+            "setMeridianFlipValues",
+        } <= ekos.REQUIRED_MOUNT_METHODS
+
+    def test_a_method_kstars_gained_would_be_caught(self) -> None:
+        """The positive control, and the reason equality is asserted rather
+        than containment: a KStars release adding a method has to fail here."""
+        gained = mount().method_names() | {"flipNow"}
+        assert gained != ekos.REQUIRED_MOUNT_METHODS
+
+    def test_a_method_the_bridge_dropped_would_be_caught_too(self) -> None:
+        dropped = ekos.REQUIRED_MOUNT_METHODS - {"sync"}
+        assert dropped != mount().method_names()
+
+    def test_every_one_is_reachable_through_a_bridge_method(self) -> None:
+        """A name in the required set that nothing calls is a name that was
+        added to make this file pass rather than to be used."""
+        source = inspect.getsource(ekos)
+        for member in sorted(ekos.REQUIRED_MOUNT_METHODS):
+            assert f'"{member}"' in source, member
+
+    def test_that_reachability_check_can_fail(self) -> None:
+        assert '"flipNow"' not in inspect.getsource(ekos)
+
+
+class TestTheMountPropertiesThatMakeCommandsJudgeable:
+    """Two reads, and three commands that cannot be decided without them."""
+
+    def test_both_are_declared_by_the_module(self) -> None:
+        missing = sorted(ekos.REQUIRED_MOUNT_PROPERTIES - set(mount().properties))
         assert not missing, missing
 
-    def test_the_forbidden_list_is_not_empty(self) -> None:
-        assert len(ekos.FORBIDDEN_MOUNT_METHODS) >= 5
+    def test_the_set_is_not_empty(self) -> None:
+        assert {"equatorialCoords", "parkStatus"} == ekos.REQUIRED_MOUNT_PROPERTIES
 
-    def test_none_of_them_appears_in_the_bridges_call_set(self) -> None:
-        overlap = sorted(set(ekos.FORBIDDEN_MOUNT_METHODS) & ekos.REQUIRED_MOUNT_METHODS)
-        assert overlap == []
+    def test_a_property_kstars_does_not_have_is_reported_missing(self) -> None:
+        """The positive control."""
+        invented = frozenset({"parkStatus", "isFlipping"})
+        assert sorted(invented - set(mount().properties)) == ["isFlipping"]
 
-    @pytest.mark.parametrize("member", sorted(ekos.FORBIDDEN_MOUNT_METHODS))
-    def test_the_bridge_never_calls_one(self, member: str) -> None:
-        """The names may be *listed* — that is what the reasons are for — but
-        never passed to ``_call``, which is the only thing that reaches KStars."""
-        source = inspect.getsource(ekos)
-        assert f'"{member}"' not in source.replace(f'"{member}": ', "")
+    def test_the_coordinates_come_back_as_an_array_of_doubles(self) -> None:
+        assert mount().properties["equatorialCoords"] == "ad"
 
-    def test_that_source_check_can_fail(self) -> None:
-        """The positive control: the same detector, over a call that makes one."""
-        offender = 'await self._call(self._mount_interface(), "sync", ra, dec)'
-        assert '"sync"' in offender.replace('"sync": ', "")
+    def test_the_park_status_is_an_integer_with_no_names_attached(self) -> None:
+        """Which is exactly why ``PARK_STATUS_PARKED`` is a recorded constant.
 
-    def test_every_method_kstars_offers_is_either_called_or_refused(self) -> None:
-        """No third category. A method in neither list is one nobody decided on."""
-        undecided = sorted(
-            mount().method_names()
-            - ekos.REQUIRED_MOUNT_METHODS
-            - set(ekos.FORBIDDEN_MOUNT_METHODS)
-        )
-        assert undecided == [], (
-            f"the mount module offers {undecided}, which Nocturne neither calls nor "
-            "refuses. Decide: add it to REQUIRED_MOUNT_METHODS with the command that "
-            "uses it, or to FORBIDDEN_MOUNT_METHODS with the reason (ADR 0022)"
-        )
+        The DBus type is a bare ``i``. Nothing in the interface says which
+        integer means parked, and getting it wrong would let a model reset
+        through on a tracking mount.
+        """
+        assert mount().properties["parkStatus"] == "i"
+        assert ekos.PARK_STATUS_PARKED == 1
 
-    def test_the_partition_covers_something(self) -> None:
-        """Two empty lists partition an empty interface perfectly."""
-        assert len(mount().method_names()) == 9
+
+class TestTheCatalogueLookups:
+    """Resolving a name is what turns ``gotoTarget`` into a pointing decision."""
+
+    def test_the_path_is_kstars_own_object(self) -> None:
+        assert ekos.KSTARS_PATH == "/KStars"
+        assert ekos.KSTARS_INTERFACE == "org.kde.kstars"
+
+    def test_it_exists_before_ekos_is_started(self) -> None:
+        """Unlike the module objects. This is why it attaches at connect time."""
+        assert ekos.KSTARS_PATH in exported_objects()
+        assert ekos.KSTARS_INTERFACE in exported_objects()[ekos.KSTARS_PATH]
+
+    def test_both_lookups_exist(self) -> None:
+        declared = declared_interfaces()[ekos.KSTARS_INTERFACE]
+        missing = sorted(ekos.REQUIRED_KSTARS_METHODS - declared.method_names())
+        assert not missing, missing
+
+    def test_the_set_is_not_empty(self) -> None:
+        assert len(ekos.REQUIRED_KSTARS_METHODS) == 2
+
+    def test_a_lookup_kstars_does_not_have_is_reported_missing(self) -> None:
+        declared = declared_interfaces()[ekos.KSTARS_INTERFACE]
+        assert "resolveTarget" not in declared.method_names()
+
+    def test_each_takes_a_name_and_returns_a_document(self) -> None:
+        declared = declared_interfaces()[ekos.KSTARS_INTERFACE]
+        for member in sorted(ekos.REQUIRED_KSTARS_METHODS):
+            single_argument = [
+                overload
+                for overload in declared.methods[member]
+                if overload.in_signature == "s"
+            ]
+            assert single_argument, f"{member} has no one-name overload"
+            assert single_argument[0].out_signature == "s"
+
+    def test_getObjectDataXML_is_overloaded_and_the_bridge_uses_the_short_one(  # noqa: N802
+        self,
+    ) -> None:
+        """It takes one, two or three arguments; the extra two ask KStars to go
+        to the internet for a name it does not know. The bridge calls it with
+        one, which keeps a catalogue lookup a local operation."""
+        overloads = declared_interfaces()[ekos.KSTARS_INTERFACE].methods["getObjectDataXML"]
+        assert {overload.in_signature for overload in overloads} == {"s", "sb", "sbb"}
 
 
 class TestTheUnitsWereReadFromTheSourceNotAssumed:
@@ -538,12 +613,58 @@ class TestTheUnitsWereReadFromTheSourceNotAssumed:
     def test_it_covers_every_method_the_bridge_calls(self) -> None:
         text = mount_units_documentation()
         for member in sorted(ekos.REQUIRED_MOUNT_METHODS):
-            assert f"bool {member}(" in text, member
+            assert f"{member}(" in text, member
 
     def test_the_detector_would_notice_a_missing_declaration(self) -> None:
         """The positive control for the check above."""
+        assert "flipNow(" not in mount_units_documentation()
+
+
+class TestTheFlipOffsetIsInDegreesAndTheXMLSaysHours:
+    """The one place the recorded interface is not merely silent but wrong.
+
+    ``kstars-dbus-interfaces.xml`` names the second argument of
+    ``setMeridianFlipValues`` ``hours``. It is degrees. Everything in this
+    repository that trusts the introspection XML — which is nearly everything,
+    deliberately — would have taken that name at face value, and a flip
+    configured in hours where degrees were wanted is out by a factor of fifteen
+    in the direction that flips too late.
+    """
+
+    def test_the_xml_really_does_say_hours(self) -> None:
+        """The defect, asserted against the recording rather than described."""
+        recorded = mount().methods["setMeridianFlipValues"][0]
+        assert recorded.argument_names == ("activate", "hours")
+
+    def test_the_source_says_degrees(self) -> None:
         text = mount_units_documentation()
-        assert "bool flipNow(" not in text
+        assert "void Mount::setMeridianFlipValues(bool activate, double degrees)" in text
+        assert "meridianFlipOffsetDegrees->setValue(degrees);" in text
+
+    def test_the_arithmetic_that_settles_it_is_recorded_too(self) -> None:
+        """A doxygen comment can be stale. The division cannot."""
+        assert "double offset = rangeHA(m_offset / 15.0);" in mount_units_documentation()
+
+    def test_the_bridge_names_its_argument_for_the_unit(self) -> None:
+        signature = inspect.signature(ekos.EkosBridge.mount_set_meridian_flip)
+        assert "offset_deg" in signature.parameters
+        assert "hours" not in signature.parameters
+
+    def test_the_command_does_too(self) -> None:
+        from nocturne.safety import SetMeridianFlipOffset
+
+        assert "offset_deg" in SetMeridianFlipOffset.model_fields
+        assert "hours" not in SetMeridianFlipOffset.model_fields
+
+    def test_the_park_status_values_are_recorded(self) -> None:
+        text = mount_units_documentation()
+        assert "PARK_UNKNOWN, PARK_PARKED, PARK_PARKING" in text
+        assert "PARK_PARKED is 1." in text
+
+    def test_the_catalogue_documents_are_recorded_in_degrees(self) -> None:
+        text = mount_units_documentation()
+        assert 'writeTextElement("RA_Degrees"' in text
+        assert "86.4 seconds" in text
 
 
 class TestTheMountStubMatchesTheRecordedSignatures:
@@ -556,7 +677,10 @@ class TestTheMountStubMatchesTheRecordedSignatures:
         out = annotations.pop(_RETURN, "")
         return "".join(annotations.values()), out
 
-    @pytest.mark.parametrize("member", ["slew", "park", "unpark", "abort"])
+    @pytest.mark.parametrize(
+        "member",
+        ["slew", "sync", "gotoTarget", "syncTarget", "park", "unpark", "abort", "resetModel"],
+    )
     def test_it_declares_what_kstars_declares(self, member: str) -> None:
         recorded = mount().methods[member][0]
         assert self.stub_signature(member) == (
@@ -574,16 +698,30 @@ class TestTheMountStubMatchesTheRecordedSignatures:
         }
         assert exported >= ekos.REQUIRED_MOUNT_METHODS, sorted(exported)
 
-    def test_the_stub_offers_none_of_the_refused_ones(self) -> None:
-        """A stub that answered ``sync`` would make calling it look harmless."""
-        exported = {
-            name
-            for name, member in inspect.getmembers(
-                fake_kstars.FakeMountInterface, inspect.isfunction
-            )
-            if not name.startswith("_")
-        }
-        assert exported & set(ekos.FORBIDDEN_MOUNT_METHODS) == set()
+    def test_the_flip_setter_declares_what_kstars_declares(self) -> None:
+        """Separately, because it is the one that returns nothing.
+
+        KStars marks it ``NoReply``, so the stub must too — and because it takes
+        the argument KStars misnames, this is where the misnaming is pinned to
+        the recording rather than to anyone's memory of it.
+        """
+        recorded = mount().methods["setMeridianFlipValues"][0]
+        assert recorded.in_signature == "bd"
+        assert recorded.out_signature == ""
+        assert self.stub_signature("setMeridianFlipValues") == ("bd", "")
+
+    def test_the_stub_reports_a_position_and_a_park_status(self) -> None:
+        """Both are properties rather than methods, and dbus-next declares them
+        differently — so a stub that got that wrong would export nothing and the
+        bridge's containment check would fail for a confusing reason."""
+        for member in sorted(ekos.REQUIRED_MOUNT_PROPERTIES):
+            assert hasattr(fake_kstars.FakeMountInterface, member)
+
+    def test_the_stub_park_status_starts_unknown(self) -> None:
+        """PARK_UNKNOWN, which is what a driver that has not spoken reports —
+        and it must not read as parked. A stub starting at PARK_PARKED would
+        make every model-reset test pass without the rule doing anything."""
+        assert fake_kstars.FakeMountInterface().park_status != ekos.PARK_STATUS_PARKED
 
     def test_the_minimal_stub_really_is_missing_something(self) -> None:
         """It exists to make the bridge's containment check fire; if it offered
@@ -596,3 +734,95 @@ class TestTheMountStubMatchesTheRecordedSignatures:
             if not name.startswith("_")
         }
         assert ekos.REQUIRED_MOUNT_METHODS - exported
+
+
+class TestTheBridgeNamesAccessorsTheWayDbusNextDoes:
+    """A defect this suite did not catch until a method with an acronym in it.
+
+    ``_call`` looks up the accessor dbus-next generated, by converting the DBus
+    member name the same way. It used to do that with a rule of its own — an
+    underscore before every capital — which is right for ``connectDevices`` and
+    wrong for ``getObjectDataXML``: dbus-next keeps a run of capitals together
+    and produces ``get_object_data_xml``, the naive rule produces
+    ``get_object_data_x_m_l``, and the bridge reports "not available on this
+    KStars build" for a method KStars plainly has.
+
+    Every member the bridge had called until then happened to have no capital
+    run, so the rule was correct for everything it was ever asked. That is
+    exactly the shape of bug this file exists for, so the check is now against
+    dbus-next itself and over every name in the recording rather than over an
+    example somebody thought of.
+    """
+
+    def member_names(self) -> list[str]:
+        """Every method and property name in the recorded interfaces."""
+        names = {
+            name
+            for interfaces in running_objects().values()
+            for interface_name, interface in interfaces.items()
+            if interface_name.startswith("org.kde.kstars")
+            for name in (*interface.methods, *interface.properties)
+        }
+        return sorted(names)
+
+    def test_the_recording_has_names_to_check(self) -> None:
+        """An empty list agrees with anything."""
+        names = self.member_names()
+        assert len(names) >= 100, len(names)
+        assert "getObjectDataXML" in names
+
+    def test_it_agrees_with_dbus_next_on_every_recorded_name(self) -> None:
+        from dbus_next.proxy_object import BaseProxyInterface
+
+        # dbus-next is untyped, and this is the one place its private
+        # conversion is called. Reaching for it is the point: the authority on
+        # what accessor dbus-next generates is dbus-next.
+        convert: Callable[[str], str] = BaseProxyInterface._to_snake_case
+        disagreements = [
+            (name, ekos._snake(name), convert(name))
+            for name in self.member_names()
+            if ekos._snake(name) != convert(name)
+        ]
+        assert disagreements == []
+
+    def test_the_rule_that_used_to_be_here_does_not_agree(self) -> None:
+        """The positive control, and it is the real historical defect.
+
+        Without this, the comparison above would pass just as happily over a
+        conversion nobody had ever got wrong.
+        """
+
+        def naive(member: str) -> str:
+            out: list[str] = []
+            for index, character in enumerate(member):
+                if character.isupper() and index:
+                    out.append("_")
+                out.append(character.lower())
+            return "".join(out)
+
+        assert naive("getObjectDataXML") == "get_object_data_x_m_l"
+        assert ekos._snake("getObjectDataXML") == "get_object_data_xml"
+        assert [name for name in self.member_names() if naive(name) != ekos._snake(name)]
+
+    @pytest.mark.parametrize(
+        ("member", "accessor"),
+        [
+            ("start", "start"),
+            ("stop", "stop"),
+            ("connectDevices", "connect_devices"),
+            ("getDevices", "get_devices"),
+            ("slew", "slew"),
+            ("setMeridianFlipValues", "set_meridian_flip_values"),
+            ("equatorialCoords", "equatorial_coords"),
+            ("parkStatus", "park_status"),
+        ],
+    )
+    def test_the_names_without_a_capital_run_are_unchanged_by_the_fix(
+        self, member: str, accessor: str
+    ) -> None:
+        """Which is why it went unnoticed: every earlier call was unaffected.
+
+        These are spelled out rather than derived, so that a future rewrite of
+        the conversion has to keep working for the calls that already do.
+        """
+        assert ekos._snake(member) == accessor

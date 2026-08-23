@@ -31,11 +31,18 @@ from nocturne.safety import (
     Command,
     ConnectDevice,
     DisconnectDevice,
+    MountReport,
     ParkMount,
+    ResetMountModel,
+    ResolvedTarget,
     SafetyGovernor,
     SafetyViolation,
+    SetMeridianFlipOffset,
     SetProperty,
     SlewToCoordinates,
+    SlewToTarget,
+    SyncToCoordinates,
+    SyncToTarget,
     UnparkMount,
 )
 
@@ -47,6 +54,16 @@ logger = logging.getLogger("nocturne.executor")
 #: finished. Anything that waits for a slew to complete watches the mount's
 #: coordinates, and that belongs to the session layer.
 CommandResult = Property | bool | None
+
+
+class UnknownTargetError(LookupError):
+    """A target name KStars' catalogue does not contain.
+
+    Not a :class:`~nocturne.safety.SafetyViolation`. Nothing unsafe happened —
+    the operator or the agent asked for something that is not there — and
+    dressing an ordinary miss up as a safety refusal makes the safety log
+    useless for reading what the safety layer actually stopped.
+    """
 
 
 @final
@@ -187,10 +204,11 @@ class Executor:
 
     # ---------------------------------------------------------- the mount
 
-    # These four are the whole of what Nocturne asks the mount to do, and each
-    # one is a command object before it is a DBus call: the governor sees a
-    # SlewToCoordinates, not a pair of floats already on their way to KStars.
-    # ADR 0022 records which of the mount module's other methods are refused.
+    # The whole of what Nocturne asks the mount to do, and each one is a command
+    # object before it is a DBus call: the governor sees a SlewToCoordinates,
+    # not a pair of floats already on their way to KStars. ADR 0023 records the
+    # rule each one carries, and ADR 0022 — which it supersedes — records the
+    # argument those rules had to answer.
 
     async def slew(
         self, ra_hours: float, dec_deg: float, *, timeout: float | None = None
@@ -221,6 +239,123 @@ class Executor:
     async def abort_motion(self, *, timeout: float | None = None) -> bool:
         """Stop the mount moving."""
         return await self._execute_mount(AbortMotion(), timeout=timeout)
+
+    async def sync(
+        self, ra_hours: float, dec_deg: float, *, timeout: float | None = None
+    ) -> bool:
+        """Tell the mount it is at this equatorial position, if permitted.
+
+        This is how a plate solve corrects the mount's pointing. It moves
+        nothing; it moves the mount's model of where it is, which is the frame
+        every limit in SPEC section 9 is measured in — so the governor bounds
+        how far, against ``limits.targeting.sync_tolerance_deg``.
+
+        Reads the mount's current position first and sends it with the command:
+        how far a sync moves the model is the question, and neither coordinate
+        pair answers it alone.
+
+        Raises:
+            SafetyViolation: if the sync is larger than the tolerance, or either
+                position is not a place on the sky. Nothing is sent.
+        """
+        command = SyncToCoordinates(
+            ra_hours=ra_hours, dec_deg=dec_deg, reported=await self._mount_report()
+        )
+        return await self._execute_mount(command, timeout=timeout)
+
+    async def slew_to_target(self, name: str, *, timeout: float | None = None) -> bool:
+        """Slew to a target named rather than pointed at, if permitted.
+
+        The name is resolved through KStars *before* the governor sees the
+        command, so what is validated is a place on the sky and not a string.
+        Every pointing limit then applies exactly as it does to
+        :meth:`slew`, with two more in front of them: the object must hold still
+        (SPEC section 1.2), and the resolution must be fresh.
+
+        Raises:
+            UnknownTargetError: if KStars' catalogue does not know the name.
+            SafetyViolation: if the resolved position is refused. Nothing is sent.
+        """
+        command = SlewToTarget(target=await self._resolve(name))
+        return await self._execute_mount(command, timeout=timeout)
+
+    async def sync_to_target(self, name: str, *, timeout: float | None = None) -> bool:
+        """Tell the mount it is pointing at a named target, if permitted.
+
+        The rough startup alignment: point at something bright by eye, then say
+        what it was. Carries the rules of a resolution and of a sync.
+
+        Raises:
+            UnknownTargetError: if KStars' catalogue does not know the name.
+            SafetyViolation: if the resolution or the sync is refused.
+        """
+        command = SyncToTarget(
+            target=await self._resolve(name), reported=await self._mount_report()
+        )
+        return await self._execute_mount(command, timeout=timeout)
+
+    async def reset_mount_model(self, *, timeout: float | None = None) -> bool:
+        """Discard the mount's alignment model, if permitted.
+
+        Permitted only with the mount parked: parked, the position afterwards is
+        one the driver knows without the model; tracking, it is nothing at all.
+
+        Returns False when the mount had no alignment model to discard, which is
+        "nothing to do" rather than a failure.
+
+        Raises:
+            SafetyViolation: if the mount is not parked. Nothing is sent.
+        """
+        command = ResetMountModel(reported=await self._mount_report())
+        return await self._execute_mount(command, timeout=timeout)
+
+    async def set_meridian_flip(
+        self, *, enabled: bool, offset_deg: float = 0.0, timeout: float | None = None
+    ) -> bool:
+        """Configure Ekos' own automatic meridian flip, if permitted.
+
+        ``offset_deg`` is the hour angle at which Ekos flips, in **degrees**,
+        negative east of the meridian. Under ADR 0020 the keep-out band brackets
+        the meridian, so a flip that is to happen before the tube enters it is a
+        *negative* offset — which is the opposite of what Ekos' own default
+        suggests, and the reason the governor checks rather than trusts.
+
+        Raises:
+            SafetyViolation: if Ekos would flip after the tube reaches the
+                governor's keep-out band, or while the limits are uncalibrated.
+        """
+        command = SetMeridianFlipOffset(enabled=enabled, offset_deg=offset_deg)
+        return await self._execute_mount(command, timeout=timeout)
+
+    # --------------------------------------------- what a command carries
+
+    async def _mount_report(self) -> MountReport:
+        """What the mount says about itself, read now, for the governor to judge.
+
+        Read here rather than inside the governor, and passed *with* the command
+        (ADR 0023): the governor stays a function of what it was handed, and the
+        decision stays reproducible from its log line.
+        """
+        ra_hours, dec_deg = await self._mount().mount_equatorial_coords()
+        return MountReport(
+            ra_hours=ra_hours, dec_deg=dec_deg, parked=await self._mount().mount_is_parked()
+        )
+
+    async def _resolve(self, name: str) -> ResolvedTarget:
+        """``name`` as a place on the sky, or an error naming what was not found.
+
+        Raises:
+            UnknownTargetError: if KStars' catalogue has no such object. A name
+                that resolves to nothing is not a safety refusal — there is
+                nothing unsafe about it — so it is not one.
+        """
+        resolved = await self._mount().resolve_target(name)
+        if resolved is None:
+            raise UnknownTargetError(
+                f"KStars' catalogue does not contain {name!r}. Check the spelling, or "
+                "give the coordinates directly with slew()."
+            )
+        return resolved
 
     async def _execute_property(
         self, command: Command, *, timeout: float | None
@@ -294,6 +429,16 @@ class Executor:
                 return await self._mount().mount_unpark()
             case AbortMotion():
                 return await self._mount().mount_abort()
+            case SyncToCoordinates(ra_hours=ra_hours, dec_deg=dec_deg):
+                return await self._mount().mount_sync(ra_hours, dec_deg)
+            case SlewToTarget(target=target):
+                return await self._mount().mount_goto_target(target.name)
+            case SyncToTarget(target=target):
+                return await self._mount().mount_sync_target(target.name)
+            case ResetMountModel():
+                return await self._mount().mount_reset_model()
+            case SetMeridianFlipOffset(enabled=enabled, offset_deg=offset_deg):
+                return await self._mount().mount_set_meridian_flip(enabled, offset_deg)
             case _:
                 # The governor rejects unregistered command types, so reaching
                 # here means the registry and this dispatch disagree.

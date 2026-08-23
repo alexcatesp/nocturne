@@ -33,10 +33,15 @@ from nocturne.safety import (
     Ok,
     ParkMount,
     Rejected,
+    ResetMountModel,
     RuleContext,
     SafetyGovernor,
+    SetMeridianFlipOffset,
     SetProperty,
     SlewToCoordinates,
+    SlewToTarget,
+    SyncToCoordinates,
+    SyncToTarget,
     UnparkMount,
     enforced_band_deg,
 )
@@ -590,9 +595,19 @@ _EXTRACTOR_KNOWS = {
     DisconnectDevice,
     SetProperty,
     SlewToCoordinates,
+    SlewToTarget,
     ParkMount,
     UnparkMount,
     AbortMotion,
+    # Answered "not a pointing command" on purpose, and each for its own
+    # reason: a sync reports where the instrument is rather than naming a
+    # destination, a model reset discards the frame, and the flip offset
+    # configures Ekos. All three are bounded by rules of their own
+    # (SYNC_RULES, MODEL_RULES, FLIP_RULES — ADR 0023).
+    SyncToCoordinates,
+    SyncToTarget,
+    ResetMountModel,
+    SetMeridianFlipOffset,
 }
 
 

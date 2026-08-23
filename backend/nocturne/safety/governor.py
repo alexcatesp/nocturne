@@ -43,14 +43,29 @@ from nocturne.safety.commands import (
     ConnectDevice,
     DisconnectDevice,
     ParkMount,
+    ResetMountModel,
+    SetMeridianFlipOffset,
     SetProperty,
     SlewToCoordinates,
+    SlewToTarget,
+    SyncToCoordinates,
+    SyncToTarget,
     UnparkMount,
 )
 from nocturne.safety.decisions import Decision as Decision
 from nocturne.safety.decisions import Ok as Ok
 from nocturne.safety.decisions import Rejected as Rejected
-from nocturne.safety.rules import POINTING_RULES, MeasuredBand, Rule, RuleContext
+from nocturne.safety.rules import (
+    FLIP_RULES,
+    MODEL_RULES,
+    POINTING_RULES,
+    RESOLVED_POINTING_RULES,
+    RESOLVED_SYNC_RULES,
+    SYNC_RULES,
+    MeasuredBand,
+    Rule,
+    RuleContext,
+)
 from nocturne.schemas import AUTONOMY_LEVELS, AutonomyLevel, SafetyConfig, Site
 
 logger = logging.getLogger("nocturne.safety")
@@ -123,16 +138,29 @@ def _system_clock() -> datetime:
 #: decision, not an omission: connecting a driver commands no motion, and what a
 #: driver does on connect is bounded at bring-up by
 #: :class:`~nocturne.executor.mount.MountLink`. ``ParkMount``, ``UnparkMount``
-#: and ``AbortMotion`` carry none either, and that decision is ADR 0022: two of
-#: them *are* the safe state, and none of the three names a place on the sky.
+#: and ``AbortMotion`` carry none either, and that decision is ADR 0022, kept by
+#: ADR 0023 when every other call on the mount interface gained one: two of them
+#: *are* the safe state, and none of the three names a place on the sky.
 #: ``SetProperty`` and ``SlewToCoordinates`` carry the pointing rules — the
 #: former applies them only to the writes that point
 #: (:mod:`nocturne.safety.properties`), the latter to every one of them.
+#:
+#: The rest of the mount's surface carries rules of its own rather than the
+#: pointing ones, because none of it names a destination and each is dangerous
+#: in a different way (ADR 0023): a sync edits the frame the limits are measured
+#: in, a model reset discards it, a named target hands over a string in place of
+#: a coordinate, and Ekos' own flip is a second thing deciding when to cross the
+#: meridian. **Every one of them is bounded. None is waved through.**
 COMMAND_RULES: Final[Mapping[type[Command], tuple[Rule, ...]]] = {
     ConnectDevice: (),
     DisconnectDevice: (),
     SetProperty: POINTING_RULES,
     SlewToCoordinates: POINTING_RULES,
+    SlewToTarget: RESOLVED_POINTING_RULES,
+    SyncToCoordinates: SYNC_RULES,
+    SyncToTarget: RESOLVED_SYNC_RULES,
+    ResetMountModel: MODEL_RULES,
+    SetMeridianFlipOffset: FLIP_RULES,
     ParkMount: (),
     UnparkMount: (),
     AbortMotion: (),

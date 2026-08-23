@@ -27,6 +27,7 @@ from nocturne.executor.ekos import (
     EkosUnavailableError,
 )
 from nocturne.executor.settings import EkosSettings
+from nocturne.safety.sky import julian_date
 from tests.fixtures.fake_kstars import (
     FakeKStars,
     FakeMountInterface,
@@ -418,3 +419,138 @@ class TestTheModuleHandleDoesNotSurviveKStars:
         await wait_for(lambda: bridge.state is BridgeState.RECONNECTING)
         with pytest.raises(EkosError, match="not connected"):
             await bridge.attach_modules(timeout_s=0.1)
+
+
+class TestReadingTheMount:
+    """Two reads, and the refusals that stop them becoming a default."""
+
+    @pytest.fixture
+    async def attached(self, bridge: EkosBridge) -> EkosBridge:
+        await bridge.start_ekos()
+        await bridge.attach_modules()
+        return bridge
+
+    async def test_the_position_comes_back_in_hours_and_degrees(
+        self, attached: EkosBridge, kstars: FakeKStars
+    ) -> None:
+        mount_of(kstars).position = (5.5, -12.25)
+        ra_hours, dec_deg = await attached.mount_equatorial_coords()
+        assert ra_hours == pytest.approx(5.5)
+        assert dec_deg == pytest.approx(-12.25)
+
+    async def test_a_position_that_is_not_a_pair_is_refused(
+        self, attached: EkosBridge, kstars: FakeKStars
+    ) -> None:
+        """Not defaulted to zero, which is a real place on the sky and would
+        make a sync look enormous from one part of it and tiny from another."""
+        mount_of(kstars).position = (5.5,)  # type: ignore[assignment]
+        with pytest.raises(EkosError, match="not a right ascension"):
+            await attached.mount_equatorial_coords()
+
+    @pytest.mark.parametrize(
+        ("status", "parked"),
+        [(0, False), (1, True), (2, False), (3, False), (4, False), (5, False)],
+    )
+    async def test_only_park_parked_reads_as_parked(
+        self, attached: EkosBridge, kstars: FakeKStars, status: int, parked: bool
+    ) -> None:
+        """The whole ISD::ParkStatus enum, walked. PARK_UNKNOWN is zero and is
+        what the property reads before the driver has said anything."""
+        mount_of(kstars).park_status = status
+        assert await attached.mount_is_parked() is parked
+
+    async def test_reading_before_attaching_is_refused(self, bridge: EkosBridge) -> None:
+        with pytest.raises(EkosError, match="not attached"):
+            await bridge.mount_equatorial_coords()
+
+
+class TestResolvingATargetName:
+    """The lookup that turns ``gotoTarget`` into a pointing decision."""
+
+    async def test_a_known_name_comes_back_with_a_position(self, bridge: EkosBridge) -> None:
+        resolved = await bridge.resolve_target("M 31")
+        assert resolved is not None
+        assert resolved.name == "M 31"
+        assert resolved.object_type == "Galaxy"
+
+    async def test_the_position_is_converted_from_degrees_to_hours(
+        self, bridge: EkosBridge
+    ) -> None:
+        """KStars reports the catalogue in degrees; the mount takes hours.
+
+        M 31 is at 10.6847 degrees of right ascension, which is 0.712 hours. A
+        bridge that passed the number through would hand the governor 10.68
+        hours — a real position, ten hours from the right one, and nothing in
+        the types would object.
+        """
+        resolved = await bridge.resolve_target("M 31")
+        assert resolved is not None
+        assert resolved.ra_hours == pytest.approx(10.6847 / 15.0, abs=1e-6)
+        assert resolved.dec_deg == pytest.approx(41.269, abs=1e-6)
+
+    async def test_an_unknown_name_comes_back_as_nothing(self, bridge: EkosBridge) -> None:
+        """KStars answers a name it does not know with a well-formed empty
+        document rather than an error, so this is the shape that has to be
+        recognised."""
+        assert await bridge.resolve_target("NGC 99999") is None
+
+    async def test_the_clock_comes_back_with_the_position(
+        self, bridge: EkosBridge, kstars: FakeKStars
+    ) -> None:
+        """And it is KStars' clock, which is the entire point of carrying it."""
+        kstars.kstars.julian_date = 2461000.5
+        resolved = await bridge.resolve_target("M 31")
+        assert resolved is not None
+        assert resolved.resolved_at.tzinfo is not None
+        assert julian_date(resolved.resolved_at) == pytest.approx(2461000.5, abs=1e-3)
+
+    async def test_a_moving_object_resolves_with_its_type(self, bridge: EkosBridge) -> None:
+        """The bridge does not refuse it. The governor does, on this field."""
+        resolved = await bridge.resolve_target("Jupiter")
+        assert resolved is not None
+        assert resolved.object_type == "Planet"
+
+    async def test_the_lookup_asks_kstars_for_both_documents(
+        self, bridge: EkosBridge, kstars: FakeKStars
+    ) -> None:
+        """Position and type live in different calls, and both are needed."""
+        kstars.kstars.lookups.clear()
+        await bridge.resolve_target("M 13")
+        assert kstars.kstars.lookups == ["M 13", "M 13"]
+
+    async def test_a_document_that_is_not_xml_is_an_error(self, bus_address: str) -> None:
+        fake = FakeKStars(bus_address)
+        await fake.start()
+        connected = EkosBridge(
+            bus_type=BusType.SESSION, bus_address=bus_address, settings=IMPATIENT
+        )
+        try:
+            await connected.connect()
+            fake.kstars.broken = "not xml at all"
+            with pytest.raises(EkosError, match="not XML"):
+                await connected.resolve_target("M 31")
+        finally:
+            await connected.aclose()
+            await fake.stop()
+
+    async def test_a_document_missing_the_position_is_an_error(self, bus_address: str) -> None:
+        """A well-formed answer that is not the documented one. Silence here
+        would become a coordinate of zero, which is a place on the sky."""
+        fake = FakeKStars(bus_address)
+        await fake.start()
+        connected = EkosBridge(
+            bus_type=BusType.SESSION, bus_address=bus_address, settings=IMPATIENT
+        )
+        try:
+            await connected.connect()
+            fake.kstars.broken = "<object><Name>M 31</Name></object>"
+            with pytest.raises(EkosError, match="RA_Degrees"):
+                await connected.resolve_target("M 31")
+        finally:
+            await connected.aclose()
+            await fake.stop()
+
+    async def test_resolving_before_connecting_is_refused(self, bus_address: str) -> None:
+        idle = EkosBridge(bus_type=BusType.SESSION, bus_address=bus_address)
+        with pytest.raises(EkosError, match="not connected"):
+            await idle.resolve_target("M 31")
