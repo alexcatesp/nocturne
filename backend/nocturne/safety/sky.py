@@ -79,6 +79,21 @@ SUN_CENTRE_SECOND_DEG: Final = 0.020
 OBLIQUITY_DEG: Final = 23.439
 OBLIQUITY_DEG_PER_DAY: Final = 0.0000004
 
+# Precession of the equinoxes, Meeus equation 21.2 (the IAU 1976 series): the
+# three Euler angles that carry a mean place from J2000 to the mean equinox of
+# date, in arcseconds, as cubics in the Julian centuries since J2000.
+#
+# **Why this is here at all.** Ekos' align module reports a plate solve in
+# J2000, and the mount works in the equinox of date. That difference is about
+# 0.3 degrees at this epoch — the one frame distinction :class:`SkyPosition`'s
+# docstring says actually matters at the precision these limits need — and it
+# would otherwise be written into the mount's model on every alignment.
+PRECESSION_ZETA_ARCSEC: Final = (2306.2181, 0.30188, 0.017998)
+PRECESSION_Z_ARCSEC: Final = (2306.2181, 1.09468, 0.018203)
+PRECESSION_THETA_ARCSEC: Final = (2004.3109, -0.42665, -0.041833)
+
+ARCSEC_PER_DEGREE: Final = 3600.0
+
 
 @final
 @dataclass(frozen=True, slots=True)
@@ -153,6 +168,84 @@ def datetime_from_julian_date(julian: float) -> datetime:
         return datetime.fromtimestamp(seconds, tz=UTC)
     except (OverflowError, OSError, ValueError) as exc:
         raise ValueError(f"{julian!r} is not a representable Julian date: {exc}") from exc
+
+
+def _precession_angles_deg(when: datetime) -> tuple[float, float, float]:
+    """``(zeta, z, theta)`` in degrees, for the mean equinox of ``when``."""
+    centuries = (julian_date(when) - JULIAN_DATE_J2000) / DAYS_PER_JULIAN_CENTURY
+    return tuple(  # type: ignore[return-value]  # exactly three, one per series
+        (linear * centuries + quadratic * centuries**2 + cubic * centuries**3)
+        / ARCSEC_PER_DEGREE
+        for linear, quadratic, cubic in (
+            PRECESSION_ZETA_ARCSEC,
+            PRECESSION_Z_ARCSEC,
+            PRECESSION_THETA_ARCSEC,
+        )
+    )
+
+
+def precess_j2000_to_date(position: SkyPosition, when: datetime) -> SkyPosition:
+    """``position``, given in J2000, as a mean place of the equinox of ``when``.
+
+    Ekos' align module reports a plate solve in J2000; the mount points in the
+    equinox of date. Treating one as the other is an error of about 0.3 degrees
+    at this epoch, which is six per cent of the shipped meridian safety margin
+    and — far worse — would be written into the mount's model by every sync that
+    followed a solve.
+
+    **What this does not include.** Nutation, about 17 arcseconds, and annual
+    aberration, about 20. Both are three orders below the smallest limit any of
+    this is compared against, and two orders below the frame error this function
+    exists to remove; adding them would be arithmetic in the safety path with
+    nothing to show for it. So this returns a *mean* place of date rather than an
+    apparent one, and says so. ``test_safety_sky.py`` measures the difference
+    against astropy rather than asserting it here.
+    """
+    return _rotate_equatorial(position, *_precession_angles_deg(when))
+
+
+def precess_date_to_j2000(position: SkyPosition, when: datetime) -> SkyPosition:
+    """The inverse of :func:`precess_j2000_to_date`.
+
+    Needed because the align module takes a target in J2000 while the safety
+    limits are checked in the equinox of date: something has to go back the
+    other way, and it should be the same arithmetic run backwards rather than a
+    second approximation that disagrees with the first by an arcsecond nobody
+    can account for.
+
+    The rotation is inverted by exchanging the two equatorial angles and
+    negating all three, which is what transposing the rotation matrix comes to
+    (Meeus, chapter 21).
+    """
+    zeta_deg, z_deg, theta_deg = _precession_angles_deg(when)
+    return _rotate_equatorial(position, -z_deg, -zeta_deg, -theta_deg)
+
+
+def _rotate_equatorial(
+    position: SkyPosition, zeta_deg: float, z_deg: float, theta_deg: float
+) -> SkyPosition:
+    """Meeus equation 21.4, given the three Euler angles in degrees."""
+    zeta, z, theta = map(math.radians, (zeta_deg, z_deg, theta_deg))
+    ra = math.radians(position.ra_hours * DEGREES_PER_HOUR)
+    dec = math.radians(position.dec_deg)
+
+    ra_plus_zeta = ra + zeta
+    a = math.cos(dec) * math.sin(ra_plus_zeta)
+    b = math.cos(theta) * math.cos(dec) * math.cos(ra_plus_zeta) - math.sin(theta) * math.sin(
+        dec
+    )
+    c = math.sin(theta) * math.cos(dec) * math.cos(ra_plus_zeta) + math.cos(theta) * math.sin(
+        dec
+    )
+
+    # Near the pole ``asin(c)`` loses precision where ``atan2`` does not: the
+    # derivative of the sine is zero there, so the last bits of ``c`` are worth
+    # whole arcseconds of declination. The pole is where a polar-alignment solve
+    # puts the telescope, so this matters here more than it usually would.
+    return SkyPosition(
+        ra_hours=_fold(math.degrees(math.atan2(a, b) + z), 360.0) / DEGREES_PER_HOUR,
+        dec_deg=math.degrees(math.atan2(c, math.hypot(a, b))),
+    )
 
 
 def greenwich_mean_sidereal_time_deg(when: datetime) -> float:

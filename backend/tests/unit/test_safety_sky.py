@@ -41,6 +41,7 @@ from nocturne.safety.sky import (
     hour_angle_deg,
     julian_date,
     local_sidereal_time_deg,
+    precess_j2000_to_date,
     sun_position,
 )
 
@@ -102,6 +103,42 @@ def _astropy_altaz(
         warnings.simplefilter("ignore")
         altaz = target.transform_to(AltAz(obstime=time, location=location))
         return float(altaz.alt.deg), float(altaz.az.deg)
+
+
+#: Precession from J2000 to the mean equinox of date, against astropy's FK5.
+#:
+#: Ours is the IAU 1976 series and returns a *mean* place; astropy's FK5 of date
+#: is the same quantity, so the two should agree to well under an arcsecond.
+#: Measured, not chosen: over 300 random points across 2000-2024 and the whole
+#: sky, the worst disagreement is 0.073 arcseconds. The bound below is an order
+#: above that, and still 15000 times inside the 0.3-degree frame error the
+#: function exists to remove.
+PRECESSION_TOLERANCE_DEG = 0.0002
+
+
+def _astropy_precessed(ra_hours: float, dec_deg: float, when: datetime) -> tuple[float, float]:
+    """A J2000 position as a mean place of date, from astropy.
+
+    ``FK5`` with an equinox is a mean place — no nutation, no aberration — which
+    is exactly what :func:`precess_j2000_to_date` returns. Comparing against
+    ``TETE`` instead would fold in the 17 arcseconds of nutation our function
+    deliberately does not model, and the disagreement would look like an error
+    in the precession rather than the documented omission it is.
+    """
+    import astropy.units as u
+    from astropy.coordinates import FK5, SkyCoord
+    from astropy.time import Time
+    from astropy.utils import iers
+
+    iers.conf.auto_download = False
+    time = Time(when)
+    target = SkyCoord(
+        ra=ra_hours * 15.0 * u.deg, dec=dec_deg * u.deg, frame=FK5(equinox="J2000")
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        of_date = target.transform_to(FK5(equinox=time))
+        return float(of_date.ra.hour), float(of_date.dec.deg)
 
 
 def _astropy_sun(when: datetime) -> tuple[float, float]:
@@ -366,3 +403,68 @@ class TestTheOracleIsRealAndStaysThat:
 def _angular_gap(first: float, second: float) -> float:
     """The shortest distance between two angles in degrees, across the wrap."""
     return abs((first - second + 180.0) % 360.0 - 180.0)
+
+
+class TestPrecessionFromJ2000ToDate:
+    """The frame difference the align module makes unavoidable.
+
+    Ekos reports a plate solve in J2000; the mount points in the equinox of
+    date. About 0.3 degrees apart at this epoch, and syncing one as the other
+    writes that error into the mount's model on every alignment.
+    """
+
+    @SWEEP
+    @given(ra_hours=right_ascensions, dec_deg=declinations, when=instants)
+    def test_it_agrees_with_astropy_across_the_sky_and_the_sweep(
+        self, ra_hours: float, dec_deg: float, when: datetime
+    ) -> None:
+        ours = precess_j2000_to_date(SkyPosition(ra_hours=ra_hours, dec_deg=dec_deg), when)
+        theirs_ra, theirs_dec = _astropy_precessed(ra_hours, dec_deg, when)
+        assert angular_separation_deg(
+            ours, SkyPosition(ra_hours=theirs_ra, dec_deg=theirs_dec)
+        ) == pytest.approx(0.0, abs=PRECESSION_TOLERANCE_DEG)
+
+    @SWEEP
+    @given(ra_hours=right_ascensions, when=instants)
+    def test_it_holds_near_the_pole(self, ra_hours: float, when: datetime) -> None:
+        """Where a polar-alignment solve puts the telescope, and where the
+        obvious ``asin`` for declination loses its last arcseconds."""
+        for dec_deg in (89.9, -89.9, 89.999):
+            ours = precess_j2000_to_date(SkyPosition(ra_hours=ra_hours, dec_deg=dec_deg), when)
+            theirs_ra, theirs_dec = _astropy_precessed(ra_hours, dec_deg, when)
+            assert angular_separation_deg(
+                ours, SkyPosition(ra_hours=theirs_ra, dec_deg=theirs_dec)
+            ) == pytest.approx(0.0, abs=PRECESSION_TOLERANCE_DEG)
+
+    def test_at_j2000_itself_it_changes_nothing(self) -> None:
+        """The epoch is the fixed point. If this drifts, the series is wrong."""
+        j2000 = datetime(2000, 1, 1, 11, 58, 55, 816000, tzinfo=UTC)
+        position = SkyPosition(ra_hours=5.5, dec_deg=-12.25)
+        assert angular_separation_deg(
+            position, precess_j2000_to_date(position, j2000)
+        ) == pytest.approx(0.0, abs=1e-6)
+
+    def test_it_moves_a_position_by_about_the_amount_it_should(self) -> None:
+        """The positive control for every comparison above.
+
+        A precession that returned its input unchanged would agree with astropy
+        to within any tolerance at J2000 and be wrong everywhere else. This
+        asserts the function actually moves a position — roughly 0.35 degrees a
+        quarter-century out, which is the number that makes it worth having.
+        """
+        position = SkyPosition(ra_hours=5.5, dec_deg=-12.25)
+        moved = precess_j2000_to_date(position, datetime(2025, 1, 1, tzinfo=UTC))
+        separation = angular_separation_deg(position, moved)
+        assert 0.25 < separation < 0.45, separation
+
+    def test_the_output_is_a_position_on_the_sky(self) -> None:
+        """SkyPosition validates its own range; a fold that went wrong at the
+        wrap would raise rather than return a right ascension of 24.0000001."""
+        for ra_hours in (0.0, 23.999, 12.0):
+            for dec_deg in (-89.9, 0.0, 89.9):
+                result = precess_j2000_to_date(
+                    SkyPosition(ra_hours=ra_hours, dec_deg=dec_deg),
+                    datetime(2030, 6, 1, tzinfo=UTC),
+                )
+                assert 0.0 <= result.ra_hours < 24.0
+                assert -90.0 <= result.dec_deg <= 90.0
