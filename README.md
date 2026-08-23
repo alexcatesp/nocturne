@@ -22,8 +22,13 @@ calls a constrained tool API, every call validated by a non-bypassable safety la
 > one of those passes the safety governor before it reaches DBus, each bounded by a rule
 > of its own ([ADR 0023](docs/decisions/0023-the-whole-mount-interface-bounded.md)).
 >
-> **The rest of M2 does not exist yet**: no plate solving, no autofocus, no guiding, no
-> sequenced capture, no meridian flip, no session state machine. Nor does anything
+> Plate solving works, and solving does not move the telescope: Nocturne solves in the
+> one Ekos mode where a solution is only reported, reads the answer, and decides what to
+> do with it through the same safety layer as everything else
+> ([ADR 0024](docs/decisions/0024-solving-is-a-read.md)).
+>
+> **The rest of M2 does not exist yet**: no autofocus, no guiding, no sequenced capture,
+> no meridian flip, no session state machine. Nor does anything
 > beyond it — no telemetry, no stacking, no web app, no agent. A GPS/PPS receiver and
 > environmental sensors are fitted and verified but no code reads them
 > ([`docs/FIELD-NOTES-TIMING.md`](docs/FIELD-NOTES-TIMING.md)).

@@ -308,10 +308,33 @@ also still unimplemented, and until it is, nothing may write the driver's own
 carries no rules: it names no destination, and what happens after it is the watch that
 does not exist yet (ADR 0022).
 
-**Next, and in this order.** The align module — plate solve and centre; the sync it
-needs already exists and is bounded — then focus, then guide and dithering, then
-sequenced capture, then the flip. The session state machine of SPEC §10.1 is what holds
-them together and is not started. M2's AUTO criterion is a full simulated sequence, so
+**The third slice of M2 has landed: the align module, and solving is a read.**
+`Executor.solve()`, `.abort_align()`, `.set_align_target()` and the reads beside them
+drive `/KStars/Ekos/Align`. Four things about it are not obvious from the code:
+
+- **A plate solve is a mount command wearing a camera's clothes**, until you stop it
+  being one. `Align::executeGOTO()` acts on a mode set by an earlier call, so a solve
+  syncs or slews unless the mode says otherwise — with the governor seeing nothing.
+  `solve()` sets that mode to the one where Ekos does nothing, **as part of itself and
+  every time**, because Ekos changes the mode behind you: its polar-alignment path sets
+  it, and `loadAndSlew` leaves it on slew (ADR 0024).
+- **`loadAndSlew` is the one call refused**, and the reason is the source rather than
+  caution: it sets `m_SolveFromFile`, which makes `executeGOTO()` slew whatever the mode
+  was, and it leaves the mode on slew afterwards — so one call to it would turn the next
+  ordinary solve into a slew too.
+- **`getSolutionResult()` returns three doubles and the first is the field orientation**,
+  where KStars' own comment says it is the right ascension. Following the comment reads
+  the orientation as an RA and the RA as a declination: a position that is not anywhere,
+  syncable into the mount's model, and indistinguishable from a real one in an `ad`.
+- **The solver answers in J2000 and the mount is not.** `safety/sky.py` gained
+  `precess_j2000_to_date` and its inverse for that boundary — the IAU 1976 series,
+  checked against astropy at 0.073 arcseconds worst case. The executor converts in one
+  place each way and a round-trip test asserts the two are inverses.
+
+**Next, and in this order.** Focus, then guide and dithering, then sequenced capture,
+then the flip. Centring — solve, sync, slew, repeat — is assembled from primitives that
+all exist now, but the loop that repeats it belongs to the session state machine of
+SPEC §10.1, which is not started. M2's AUTO criterion is a full simulated sequence, so
 none of it is finished until that runs end to end.
 
 **Two numbers now live in `limits.targeting` and are worth knowing about.**
