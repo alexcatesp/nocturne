@@ -37,7 +37,16 @@ from dataclasses import InitVar, dataclass
 from datetime import UTC, datetime
 from typing import Final, final
 
-from nocturne.safety.commands import Command, ConnectDevice, DisconnectDevice, SetProperty
+from nocturne.safety.commands import (
+    AbortMotion,
+    Command,
+    ConnectDevice,
+    DisconnectDevice,
+    ParkMount,
+    SetProperty,
+    SlewToCoordinates,
+    UnparkMount,
+)
 from nocturne.safety.decisions import Decision as Decision
 from nocturne.safety.decisions import Ok as Ok
 from nocturne.safety.decisions import Rejected as Rejected
@@ -113,13 +122,20 @@ def _system_clock() -> datetime:
 #: ``ConnectDevice`` and ``DisconnectDevice`` carry no rules and that is a
 #: decision, not an omission: connecting a driver commands no motion, and what a
 #: driver does on connect is bounded at bring-up by
-#: :class:`~nocturne.executor.mount.MountLink`. ``SetProperty`` carries the
-#: pointing rules, which apply themselves only to the writes that point
-#: (:mod:`nocturne.safety.properties`).
+#: :class:`~nocturne.executor.mount.MountLink`. ``ParkMount``, ``UnparkMount``
+#: and ``AbortMotion`` carry none either, and that decision is ADR 0022: two of
+#: them *are* the safe state, and none of the three names a place on the sky.
+#: ``SetProperty`` and ``SlewToCoordinates`` carry the pointing rules — the
+#: former applies them only to the writes that point
+#: (:mod:`nocturne.safety.properties`), the latter to every one of them.
 COMMAND_RULES: Final[Mapping[type[Command], tuple[Rule, ...]]] = {
     ConnectDevice: (),
     DisconnectDevice: (),
     SetProperty: POINTING_RULES,
+    SlewToCoordinates: POINTING_RULES,
+    ParkMount: (),
+    UnparkMount: (),
+    AbortMotion: (),
 }
 
 

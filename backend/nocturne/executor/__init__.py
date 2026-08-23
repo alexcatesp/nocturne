@@ -7,13 +7,17 @@ anything the safety governor has not approved.
 from __future__ import annotations
 
 from .ekos import (
+    EKOS_MOUNT_INTERFACE,
+    EKOS_MOUNT_PATH,
+    FORBIDDEN_MOUNT_METHODS,
+    REQUIRED_MOUNT_METHODS,
     BridgeState,
     EkosBridge,
     EkosError,
     EkosInterfaceError,
     EkosUnavailableError,
 )
-from .executor import Executor
+from .executor import CommandResult, Executor
 from .indi.client import (
     ConnectionState,
     DeviceAppeared,
@@ -35,10 +39,15 @@ from .indi.protocol import (
     PropertyState,
     SwitchRule,
 )
-from .settings import IndiSettings
+from .settings import EkosSettings, IndiSettings
 
 __all__ = [
+    "EKOS_MOUNT_INTERFACE",
+    "EKOS_MOUNT_PATH",
+    "FORBIDDEN_MOUNT_METHODS",
+    "REQUIRED_MOUNT_METHODS",
     "BridgeState",
+    "CommandResult",
     "ConnectionState",
     "DeviceAppeared",
     "DeviceVanished",
@@ -46,6 +55,7 @@ __all__ = [
     "EkosBridge",
     "EkosError",
     "EkosInterfaceError",
+    "EkosSettings",
     "EkosUnavailableError",
     "Executor",
     "IndiClient",

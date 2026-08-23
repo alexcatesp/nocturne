@@ -26,14 +26,18 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from nocturne.safety import (
+    AbortMotion,
     ConnectDevice,
     DisconnectDevice,
     MeasuredBand,
     Ok,
+    ParkMount,
     Rejected,
     RuleContext,
     SafetyGovernor,
     SetProperty,
+    SlewToCoordinates,
+    UnparkMount,
     enforced_band_deg,
 )
 from nocturne.safety.properties import (
@@ -581,7 +585,15 @@ class TestTheExtractorIsTotal:
 #: The command types ``pointing_intent`` has been reasoned about. Kept in the
 #: test rather than derived from the code, so that adding a command type to the
 #: package cannot quietly satisfy the check above.
-_EXTRACTOR_KNOWS = {ConnectDevice, DisconnectDevice, SetProperty}
+_EXTRACTOR_KNOWS = {
+    ConnectDevice,
+    DisconnectDevice,
+    SetProperty,
+    SlewToCoordinates,
+    ParkMount,
+    UnparkMount,
+    AbortMotion,
+}
 
 
 class TestRejectionsSayEnoughToActOn:

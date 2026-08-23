@@ -39,8 +39,17 @@ do not exist until Ekos has been started, and using them is M2.
 goes through :class:`~nocturne.executor.indi.client.IndiClient`; SPEC section 4
 reserves direct INDI access for "properties Ekos does not expose", and an
 arbitrary vector on an arbitrary driver is exactly that. This bridge owns the
-Ekos-level lifecycle: is Ekos up, are the devices connected, and — in M2 — the
-align, focus, guide and capture modules.
+Ekos-level lifecycle: is Ekos up, are the devices connected, and the module
+objects Ekos creates when it starts.
+
+**The mount module is attached; the others are not yet.** ``Mount`` is here
+because M2's first moving parts need it, and the four calls Nocturne makes on it
+are gated by the safety governor like everything else that moves the
+instrument. ``Align``, ``Focus``, ``Guide`` and ``Capture`` arrive with the work
+that uses them, each with its own commands in :mod:`nocturne.safety.commands`;
+until then this module does not name them, and a structural test in
+``test_ekos_recorded_interface.py`` keeps it that way. Which of the mount
+module's own methods are deliberately *not* called is ADR 0022.
 """
 
 from __future__ import annotations
@@ -48,13 +57,15 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from enum import StrEnum
 from types import TracebackType
 from typing import Any, Final, final
 
 from dbus_next import BusType, Message, MessageType
 from dbus_next.aio import MessageBus, ProxyInterface
+
+from nocturne.executor.settings import EkosSettings
 
 logger = logging.getLogger("nocturne.executor.ekos")
 
@@ -78,6 +89,40 @@ REQUIRED_EKOS_METHODS: Final[frozenset[str]] = frozenset(
 REQUIRED_INDI_METHODS: Final[frozenset[str]] = frozenset(
     {"getDevices", "connect", "disconnect"}
 )
+
+#: The Ekos mount module. **This object does not exist until ``Ekos.start`` has
+#: run**, which is recorded rather than supposed: the two introspection captures
+#: in ``backend/tests/fixtures/hardware/`` are the same KStars process before and
+#: after that call, and it exports five paths in the first and twenty-four in the
+#: second. :meth:`EkosBridge.attach_modules` is therefore separate from
+#: :meth:`EkosBridge.connect`, and waits.
+EKOS_MOUNT_PATH: Final = "/KStars/Ekos/Mount"
+EKOS_MOUNT_INTERFACE: Final = "org.kde.kstars.Ekos.Mount"
+
+#: The mount methods the bridge calls, checked by introspection when the module
+#: is attached and checked against the recorded interface in CI.
+#:
+#: The four here are the whole of what Nocturne asks the mount module for, and
+#: which of the nine it declares are deliberately absent — ``gotoTarget``,
+#: ``syncTarget``, ``sync``, ``resetModel`` and ``setMeridianFlipValues`` — is
+#: ADR 0022, enforced by ``test_ekos_recorded_interface.py`` rather than left to
+#: memory.
+REQUIRED_MOUNT_METHODS: Final[frozenset[str]] = frozenset({"slew", "park", "unpark", "abort"})
+
+#: Mount-module methods Nocturne must not call, and the reason in one line each.
+#: Named here so that the structural test has something to check the source
+#: against; see ADR 0022 for the argument.
+FORBIDDEN_MOUNT_METHODS: Final[Mapping[str, str]] = {
+    "gotoTarget": "resolves a target name inside KStars, so the governor never sees "
+    "the coordinates it would have to check",
+    "syncTarget": "the same, and it moves the frame every limit is measured in",
+    "sync": "moves the mount's model of where it is; plate-solve syncs belong to the "
+    "align module, with the solved position in hand",
+    "resetModel": "discards the mount's alignment model, which is the frame the "
+    "meridian band is expressed in",
+    "setMeridianFlipValues": "would make Ekos a third actor deciding when to flip, "
+    "beside the governor and the driver limits of ADR 0010",
+}
 
 _DBUS_SERVICE: Final = "org.freedesktop.DBus"
 _DBUS_PATH: Final = "/org/freedesktop/DBus"
@@ -163,13 +208,16 @@ class EkosBridge:
         bus_type: BusType = BusType.SESSION,
         bus_address: str | None = None,
         reconnect_delay_s: float = 2.0,
+        settings: EkosSettings | None = None,
     ) -> None:
         self._bus_type = bus_type
         self._bus_address = bus_address
         self._reconnect_delay_s = reconnect_delay_s
+        self._settings = settings if settings is not None else EkosSettings()
         self._bus: MessageBus | None = None
         self._ekos: ProxyInterface | None = None
         self._indi: ProxyInterface | None = None
+        self._mount: ProxyInterface | None = None
         self._state = BridgeState.DISCONNECTED
         self._handlers: list[StateHandler] = []
         self._watchdog: asyncio.Task[None] | None = None
@@ -262,6 +310,11 @@ class EkosBridge:
         self._indi = await self._interface(
             bus, INDI_PATH, INDI_INTERFACE, REQUIRED_INDI_METHODS
         )
+        # A fresh KStars has not started Ekos, so whatever module proxies this
+        # bridge held belong to a process that is gone. Dropping them here is
+        # what makes a mount call after a restart raise rather than address a
+        # dead object: attach_modules() has to be run again.
+        self._mount = None
         self._set_state(BridgeState.CONNECTED)
 
     async def _open_bus(self) -> MessageBus:
@@ -282,6 +335,7 @@ class EkosBridge:
     async def _detach(self) -> None:
         self._ekos = None
         self._indi = None
+        self._mount = None
         if self._bus is not None:
             await close_bus(self._bus)
             self._bus = None
@@ -373,6 +427,7 @@ class EkosBridge:
                 logger.warning("KStars left the session bus")
                 self._ekos = None
                 self._indi = None
+                self._mount = None
                 self._set_state(BridgeState.RECONNECTING)
 
     async def _reattach(self) -> None:
@@ -404,6 +459,59 @@ class EkosBridge:
             return await method(*args)
         except Exception as exc:
             raise EkosError(f"Ekos rejected {member}: {exc}") from exc
+
+    @property
+    def is_mount_attached(self) -> bool:
+        """Whether the bridge holds a live handle on the Ekos mount module."""
+        return self._mount is not None and self.is_connected
+
+    async def attach_modules(self, *, timeout_s: float | None = None) -> None:
+        """Attach to the Ekos module objects, waiting for Ekos to create them.
+
+        Call after :meth:`start_ekos`. ``Ekos.start`` returns immediately and
+        the module objects appear on the bus some time later, so this polls
+        introspection until ``/KStars/Ekos/Mount`` is there and offers every
+        method in :data:`REQUIRED_MOUNT_METHODS`.
+
+        Idempotent: attaching twice re-introspects and replaces the handle,
+        which is what a caller recovering from a KStars restart wants.
+
+        Args:
+            timeout_s: how long to wait. Defaults to the bridge's
+                ``EkosSettings.module_attach_timeout_s``.
+
+        Raises:
+            EkosError: if the bridge is not connected to KStars at all.
+            EkosInterfaceError: if the modules have not appeared within the
+                timeout, or have appeared without the methods the bridge calls.
+        """
+        bus = self._bus
+        if bus is None or not self.is_connected:
+            raise EkosError(
+                "not connected to KStars, so its module objects cannot be attached; "
+                f"the bridge is {self._state.value}"
+            )
+        limit = timeout_s if timeout_s is not None else self._settings.module_attach_timeout_s
+        deadline = asyncio.get_running_loop().time() + limit
+        last: EkosInterfaceError | None = None
+        while True:
+            try:
+                self._mount = await self._interface(
+                    bus, EKOS_MOUNT_PATH, EKOS_MOUNT_INTERFACE, REQUIRED_MOUNT_METHODS
+                )
+            except EkosInterfaceError as exc:
+                last = exc
+            else:
+                logger.info("Ekos mount module attached", extra={"path": EKOS_MOUNT_PATH})
+                return
+            if asyncio.get_running_loop().time() >= deadline:
+                raise EkosInterfaceError(
+                    f"the Ekos module objects did not appear within {limit} s of "
+                    "Ekos being started. They are created by Ekos, not by KStars, so "
+                    "the usual cause is that Ekos never started — check that a profile "
+                    f"is set and that start_ekos() was called. Last attempt: {last}"
+                )
+            await asyncio.sleep(self._settings.module_poll_interval_s)
 
     async def start_ekos(self) -> None:
         """Start the Ekos manager with the configured profile."""
@@ -443,3 +551,66 @@ class EkosBridge:
     async def disconnect_indiserver(self, host: str, port: int) -> bool:
         """Detach KStars' INDI client from the indiserver at ``host:port``."""
         return bool(await self._call(self._indi, "disconnect", host, port))
+
+    # ------------------------------------------------------------ the mount
+
+    # Four calls, and no more. What the mount module also offers and Nocturne
+    # does not use is FORBIDDEN_MOUNT_METHODS above, with the reason for each.
+    #
+    # **On the return value of all four.** KStars documents it as "true if the
+    # command is sent successfully" — not that the mount accepted it, and
+    # certainly not that the motion finished. A slew that returns True has been
+    # handed to the driver and nothing more; whether the mount arrived is read
+    # from its coordinates, which is the session layer's business.
+    #
+    # None of these is reachable from outside nocturne.executor: the Executor
+    # holds the bridge privately and exposes no accessor, so the only way to
+    # any of them is through a command the safety governor has approved
+    # (CLAUDE.md invariant 1, enforced by tests/unit/test_safety_boundaries.py).
+
+    def _mount_interface(self) -> ProxyInterface:
+        """The mount module, or a refusal that says which step was skipped.
+
+        Two different failures wear the same mask otherwise: KStars gone, and
+        KStars present with Ekos never started. The first is waited out; the
+        second is a call the caller has to make.
+        """
+        if not self.is_connected:
+            raise EkosError(
+                f"not connected to KStars; the bridge is {self._state.value}. "
+                "Call connect() first, or wait for KStars to come back."
+            )
+        if self._mount is None:
+            raise EkosError(
+                "the Ekos mount module is not attached. Ekos creates its module "
+                "objects when it starts, so call start_ekos() and then "
+                "attach_modules() before commanding the mount."
+            )
+        return self._mount
+
+    async def mount_slew(self, ra_hours: float, dec_deg: float) -> bool:
+        """Slew the mount to an equatorial position, equinox of date.
+
+        ``org.kde.kstars.Ekos.Mount.slew(RA: d, DEC: d) -> b``. Right ascension
+        in **hours**, declination in **degrees**, in the **JNow** frame — read
+        off the KStars source at the commit ``scripts/install.sh`` pins and
+        recorded in ``backend/tests/fixtures/hardware/kstars-mount-dbus-units.txt``.
+        The introspection XML carries neither the units nor the frame, and a
+        right ascension sent in degrees is a slew to somewhere else entirely.
+        """
+        sent = await self._call(
+            self._mount_interface(), "slew", float(ra_hours), float(dec_deg)
+        )
+        return bool(sent)
+
+    async def mount_park(self) -> bool:
+        """Drive the mount to its park position."""
+        return bool(await self._call(self._mount_interface(), "park"))
+
+    async def mount_unpark(self) -> bool:
+        """Release the mount from its park position."""
+        return bool(await self._call(self._mount_interface(), "unpark"))
+
+    async def mount_abort(self) -> bool:
+        """Stop the mount moving."""
+        return bool(await self._call(self._mount_interface(), "abort"))

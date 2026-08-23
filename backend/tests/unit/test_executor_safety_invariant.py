@@ -6,13 +6,14 @@ other path." This suite attempts to find another path.
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
 
-from nocturne.executor import Executor, IndiClient, IndiSettings
+from nocturne.executor import EkosError, Executor, IndiClient, IndiSettings, Property
 from nocturne.safety import (
     COMMAND_RULES,
     Approval,
@@ -40,9 +41,22 @@ FAST = IndiSettings(
     reconnect_max_delay_s=0.05,
 )
 
-#: Public methods of Executor that change instrument state. Every one of them
-#: must be shown to pass through the governor.
-MUTATING_METHODS = ("connect_device", "disconnect_device", "set_property")
+#: Public methods of Executor that change instrument state, with the arguments
+#: to call each one with. Every one of them must be shown to pass through the
+#: governor, and ``test_every_mutating_method_is_accounted_for`` fails if a new
+#: one is added to the class without being added here.
+MUTATING_METHODS: dict[str, tuple[object, ...]] = {
+    "connect_device": (DEVICE,),
+    "disconnect_device": (DEVICE,),
+    "set_property": (DEVICE, POSITION, {ELEMENT: 1.0}),
+    # The mount commands. The executor in this file has no Ekos bridge, which is
+    # the point: a mount command must reach the governor before it discovers
+    # there is nothing to send it to.
+    "slew": (5.0, 20.0),
+    "park": (),
+    "unpark": (),
+    "abort_motion": (),
+}
 
 
 class GovernorSpy:
@@ -117,18 +131,37 @@ class TestEveryCommandIsValidated:
         assert isinstance(governor.seen[0], SetProperty)
         assert governor.seen[0].values == {ELEMENT: 1234.0}
 
-    @pytest.mark.parametrize("method_name", MUTATING_METHODS)
+    @pytest.mark.parametrize("method_name", sorted(MUTATING_METHODS))
     async def test_no_mutating_method_bypasses_the_governor(
         self, executor: Executor, governor: GovernorSpy, method_name: str
     ) -> None:
-        arguments: dict[str, tuple[object, ...]] = {
-            "connect_device": (DEVICE,),
-            "disconnect_device": (DEVICE,),
-            "set_property": (DEVICE, POSITION, {ELEMENT: 1.0}),
-        }
+        """Whatever happens afterwards, the governor saw the command first.
+
+        Two of these outcomes are legitimate and neither is what is being
+        tested: the governor refuses (``SafetyViolation`` — the shipped
+        configuration is uncalibrated, so no slew is permitted), or it permits
+        and the call then finds no Ekos bridge attached (``EkosError``). What is
+        being tested is the assertion below, which fails for a method that
+        reached either outcome without consulting the governor at all.
+        """
         governor.seen.clear()
-        await getattr(executor, method_name)(*arguments[method_name])
+        with contextlib.suppress(SafetyViolation, EkosError):
+            await getattr(executor, method_name)(*MUTATING_METHODS[method_name])
         assert governor.seen, f"{method_name} did not consult the governor"
+
+    async def test_that_check_would_catch_a_method_that_skipped_the_gate(
+        self, executor: Executor, governor: GovernorSpy
+    ) -> None:
+        """The positive control: the same assertion, over a call that bypasses.
+
+        ``_perform`` is the method the invariant is about, and reaching it with
+        a forged approval is refused — but the spy records nothing either way,
+        which is what the check above is looking for.
+        """
+        governor.seen.clear()
+        with contextlib.suppress(SafetyViolation, EkosError):
+            await executor._perform(object(), timeout=1.0)  # type: ignore[arg-type]
+        assert governor.seen == []
 
     def test_every_mutating_method_is_accounted_for(self) -> None:
         """A new mutating method added without a test here fails this test."""
@@ -140,6 +173,11 @@ class TestEveryCommandIsValidated:
             and name not in {"start", "aclose", "wait_for_property", "wait_for_device"}
         }
         assert public == set(MUTATING_METHODS)
+
+    def test_the_method_inventory_is_not_empty(self) -> None:
+        """A comparison of two empty sets proves nothing about either."""
+        assert len(MUTATING_METHODS) >= 7
+        assert "slew" in MUTATING_METHODS
 
 
 class TestRejectionStopsTheCommand:
@@ -188,7 +226,7 @@ class TestPerformRequiresAnApproval:
         )
         assert isinstance(approval, Approval)
         result = await executor._perform(approval, timeout=2.0)
-        assert result is not None
+        assert isinstance(result, Property)
         assert result[ELEMENT] == pytest.approx(4321.0)
 
 

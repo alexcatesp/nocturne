@@ -6,7 +6,17 @@ reaches the executor without an :class:`Approval` minted here.
 
 from __future__ import annotations
 
-from .commands import Command, ConnectDevice, DisconnectDevice, PropertyValue, SetProperty
+from .commands import (
+    AbortMotion,
+    Command,
+    ConnectDevice,
+    DisconnectDevice,
+    ParkMount,
+    PropertyValue,
+    SetProperty,
+    SlewToCoordinates,
+    UnparkMount,
+)
 from .decisions import Decision, Ok, Rejected
 from .governor import (
     COMMAND_RULES,
@@ -34,6 +44,7 @@ __all__ = [
     "POINTING_RULES",
     "UNATTENDED_LEVELS",
     "UNVALIDATABLE_MOTION_PROPERTIES",
+    "AbortMotion",
     "Approval",
     "Clock",
     "Command",
@@ -42,6 +53,7 @@ __all__ = [
     "DisconnectDevice",
     "MeasuredBand",
     "Ok",
+    "ParkMount",
     "PointingIntent",
     "PropertyValue",
     "Rejected",
@@ -50,6 +62,8 @@ __all__ = [
     "SafetyGovernor",
     "SafetyViolation",
     "SetProperty",
+    "SlewToCoordinates",
+    "UnparkMount",
     "enforced_band_deg",
     "pointing_intent",
 ]

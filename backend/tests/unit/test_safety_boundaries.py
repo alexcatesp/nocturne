@@ -22,13 +22,16 @@ import pytest
 
 from nocturne.executor import Executor
 from nocturne.safety import (
+    AbortMotion,
     Command,
     ConnectDevice,
     DisconnectDevice,
     Ok,
+    ParkMount,
     Rejected,
     Rule,
     SafetyGovernor,
+    UnparkMount,
 )
 from nocturne.schemas import load_config_bundle, load_safety_config
 
@@ -38,7 +41,21 @@ EXECUTOR_PACKAGE = "nocturne.executor"
 #: Methods that move the instrument. Anything exposing one of these to a caller
 #: who has not been through the governor is a bypass.
 MUTATING_TRANSPORT_METHODS = frozenset(
-    {"write", "connect_device", "disconnect_device", "connect_devices", "start_ekos"}
+    {
+        "write",
+        "connect_device",
+        "disconnect_device",
+        "connect_devices",
+        "start_ekos",
+        # The Ekos mount module. Named ``mount_*`` on the bridge rather than
+        # ``slew``/``park``/``abort`` precisely so that this detector can look
+        # for them without matching every unrelated call that happens to share a
+        # common verb.
+        "mount_slew",
+        "mount_park",
+        "mount_unpark",
+        "mount_abort",
+    }
 )
 
 
@@ -292,6 +309,8 @@ class Rogue:
     def go(self) -> None:
         self._client.write("EQMod Mount", "EQUATORIAL_EOD_COORD", {"RA": 5.0})
         self.ekos.connect_device("EQMod Mount")
+        self._ekos.mount_slew(5.0, 20.0)
+        self._ekos.mount_abort()
         Path("config/safety.yaml").write_text("altitude_min_deg: 0")
         Path("/tmp/x").mkdir()
         with open("out.fits", "w") as handle:
@@ -373,6 +392,17 @@ class TestTheDetectorsActuallyDetect:
     def test_the_mutating_call_detector_fires(self) -> None:
         found = mutating_transport_calls(OFFENDING_SOURCE, module="rogue")
         assert len(found) >= 2, found
+
+    def test_the_mutating_call_detector_sees_the_mount_module(self) -> None:
+        """The mount arrived after this detector did, so it is checked by name.
+
+        A detector extended with new method names and never pointed at one is a
+        detector that might not match them; ``mount_slew`` on a private ``_ekos``
+        is the exact shape the executor uses and nothing else may.
+        """
+        found = mutating_transport_calls(OFFENDING_SOURCE, module="rogue")
+        assert any("mount_slew" in offender for offender in found), found
+        assert any("mount_abort" in offender for offender in found), found
 
     def test_the_mutating_call_detector_ignores_the_gated_methods(self) -> None:
         """Executor.set_property is the sanctioned path and must not be flagged."""
@@ -747,6 +777,16 @@ COMMANDS_THAT_NEED_NO_RULES = {
     # (docs/FIELD-NOTES-M1.md section 3.2).
     ConnectDevice: "connecting a driver commands no motion",
     DisconnectDevice: "disconnecting a driver commands no motion",
+    # The three mount commands that name no place on the sky (ADR 0022). Park
+    # and abort are the safe state itself: SPEC section 8.5 degrades to parking,
+    # so a rule able to refuse a park would put the safe state out of reach at
+    # the moment it is wanted, and a safety layer that can refuse to stop the
+    # instrument is not one. Unpark releases the mount where it already stands
+    # and commands no motion of its own; what happens after it is the session
+    # layer's continuous watch, which ADR 0019 records as unbuilt.
+    ParkMount: "parking is the safe state every degradation path ends at",
+    UnparkMount: "unparking commands no motion and names no destination",
+    AbortMotion: "stopping the instrument is never refused",
 }
 
 

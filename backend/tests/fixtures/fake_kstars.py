@@ -24,7 +24,7 @@ member names are KStars', so they are camelCase rather than PEP 8.
 import asyncio
 import os
 import shutil
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 
 from dbus_next import BusType
@@ -33,6 +33,8 @@ from dbus_next.service import ServiceInterface, method
 
 from nocturne.executor.ekos import (
     EKOS_INTERFACE,
+    EKOS_MOUNT_INTERFACE,
+    EKOS_MOUNT_PATH,
     EKOS_PATH,
     INDI_INTERFACE,
     INDI_PATH,
@@ -50,19 +52,37 @@ DEFAULT_DEVICES = (
 
 
 class FakeEkosInterface(ServiceInterface):
-    """The subset of org.kde.kstars.Ekos that the bridge calls."""
+    """The subset of org.kde.kstars.Ekos that the bridge calls.
 
-    def __init__(self) -> None:
+    ``start`` and ``stop`` do not merely record the call: they export and
+    withdraw the module objects, because that is the behaviour the recorded
+    captures show and it is the whole reason ``attach_modules`` exists. A stub
+    that exported ``/KStars/Ekos/Mount`` from the beginning would let the bridge
+    attach to a module before Ekos was started, which the real KStars will never
+    allow, and the test would prove nothing about the order.
+    """
+
+    def __init__(
+        self,
+        on_start: "Callable[[], None] | None" = None,
+        on_stop: "Callable[[], None] | None" = None,
+    ) -> None:
         super().__init__(EKOS_INTERFACE)
         self.calls: list[str] = []
+        self._on_start = on_start
+        self._on_stop = on_stop
 
     @method()
     def start(self):
         self.calls.append("start")
+        if self._on_start is not None:
+            self._on_start()
 
     @method()
     def stop(self):
         self.calls.append("stop")
+        if self._on_stop is not None:
+            self._on_stop()
 
     @method()
     def connectDevices(self):  # noqa: N802
@@ -103,6 +123,61 @@ class FakeIndiInterface(ServiceInterface):
         return True
 
 
+class FakeMountInterface(ServiceInterface):
+    """The subset of org.kde.kstars.Ekos.Mount that the bridge calls.
+
+    Every signature is the recorded one — ``slew(d, d) -> b`` and three
+    no-argument calls returning a boolean — and
+    ``test_ekos_recorded_interface.py`` asserts as much against
+    ``hardware/kstars-dbus-interfaces.xml`` rather than against this file.
+
+    ``slew`` records what it was handed rather than pretending to move, so a
+    test can assert the right ascension arrived in hours and was not silently
+    multiplied by fifteen somewhere.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(EKOS_MOUNT_INTERFACE)
+        self.calls: list[str] = []
+        #: Every (RA hours, DEC degrees) pair this mount has been asked for.
+        self.slews: list[tuple[float, float]] = []
+        #: What the next call should return. KStars returns false when it could
+        #: not send the command, and nothing above may read that as success.
+        self.accepts = True
+
+    @method()
+    def slew(self, RA: "d", DEC: "d") -> "b":  # noqa: F821, N803
+        self.calls.append("slew")
+        self.slews.append((RA, DEC))
+        return self.accepts
+
+    @method()
+    def park(self) -> "b":  # noqa: F821
+        self.calls.append("park")
+        return self.accepts
+
+    @method()
+    def unpark(self) -> "b":  # noqa: F821
+        self.calls.append("unpark")
+        return self.accepts
+
+    @method()
+    def abort(self) -> "b":  # noqa: F821
+        self.calls.append("abort")
+        return self.accepts
+
+
+class MinimalMountInterface(ServiceInterface):
+    """A mount module missing methods the bridge needs, to test the refusal."""
+
+    def __init__(self) -> None:
+        super().__init__(EKOS_MOUNT_INTERFACE)
+
+    @method()
+    def park(self) -> "b":  # noqa: F821
+        return True
+
+
 class MinimalEkosInterface(ServiceInterface):
     """An Ekos interface missing methods the bridge needs, to test the refusal."""
 
@@ -115,14 +190,37 @@ class MinimalEkosInterface(ServiceInterface):
 
 
 class FakeKStars:
-    """Owns the org.kde.kstars bus name and exports the two stub objects."""
+    """Owns the org.kde.kstars bus name and exports the stub objects.
 
-    def __init__(self, bus_address: str, *, minimal: bool = False) -> None:
+    The module objects are **not** exported when the process starts. They appear
+    only once ``Ekos.start`` is called and disappear again on ``Ekos.stop``,
+    which is what the reference rig does: five exported paths at rest,
+    twenty-four with Ekos running.
+    """
+
+    def __init__(
+        self,
+        bus_address: str,
+        *,
+        minimal: bool = False,
+        minimal_mount: bool = False,
+    ) -> None:
         self._bus_address = bus_address
         self._minimal = minimal
+        self._minimal_mount = minimal_mount
         self._bus: MessageBus | None = None
-        self.ekos: ServiceInterface = MinimalEkosInterface() if minimal else FakeEkosInterface()
+        self.ekos: ServiceInterface = (
+            MinimalEkosInterface()
+            if minimal
+            else FakeEkosInterface(
+                on_start=self._export_modules, on_stop=self._withdraw_modules
+            )
+        )
         self.indi = FakeIndiInterface()
+        self.mount: ServiceInterface = (
+            MinimalMountInterface() if minimal_mount else FakeMountInterface()
+        )
+        self._modules_exported = False
 
     async def start(self) -> None:
         self._bus = await MessageBus(
@@ -132,6 +230,25 @@ class FakeKStars:
         if not self._minimal:
             self._bus.export(INDI_PATH, self.indi)
         await self._bus.request_name(KSTARS_BUS_NAME)
+
+    def _export_modules(self) -> None:
+        """What Ekos does when it starts: create the module objects."""
+        if self._bus is None or self._modules_exported:
+            return
+        self._bus.export(EKOS_MOUNT_PATH, self.mount)
+        self._modules_exported = True
+
+    def _withdraw_modules(self) -> None:
+        """And what it does when it stops: take them away again."""
+        if self._bus is None or not self._modules_exported:
+            return
+        self._bus.unexport(EKOS_MOUNT_PATH, self.mount)
+        self._modules_exported = False
+
+    @property
+    def modules_exported(self) -> bool:
+        """Whether the module objects are currently on the bus."""
+        return self._modules_exported
 
     async def stop(self) -> None:
         """Leave the bus, as KStars does when it is killed."""

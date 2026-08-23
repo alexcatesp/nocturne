@@ -41,6 +41,7 @@ from tests.fixtures.ekos_interfaces import (
     declared_interfaces,
     exported_child_nodes,
     exported_objects,
+    mount_units_documentation,
     running_child_nodes,
     running_objects,
 )
@@ -76,6 +77,10 @@ def indi() -> Interface:
 
 def ekos_interface() -> Interface:
     return declared_interfaces()[ekos.EKOS_INTERFACE]
+
+
+def mount() -> Interface:
+    return declared_interfaces()[ekos.EKOS_MOUNT_INTERFACE]
 
 
 class TestTheRecordingIsUsable:
@@ -386,13 +391,208 @@ class TestTheOpticalTrain:
         source = inspect.getsource(ekos)
         assert "OpticalTrain" not in source.replace(EKOS_OPTICAL_TRAIN, "")
 
-    def test_the_bridge_names_no_module_interface_at_all(self) -> None:
-        """The M2 boundary, asserted rather than intended."""
+    def test_the_bridge_names_only_the_module_it_drives(self) -> None:
+        """The M2 boundary, asserted rather than intended.
+
+        ``Mount`` is named because Nocturne drives it. The other four are not,
+        and each arrives with the commands that use it and the safety rules that
+        constrain it — never as a proxy handle somebody might find and call.
+        """
         source = inspect.getsource(ekos)
-        for node in ("Capture", "Focus", "Guide", "Align", "Mount", "Scheduler"):
+        assert ekos.EKOS_MOUNT_INTERFACE in source
+        for node in ("Capture", "Focus", "Guide", "Align", "Scheduler"):
             assert f"org.kde.kstars.Ekos.{node}" not in source
 
     def test_that_boundary_check_can_fail(self) -> None:
         """The positive control: the same detector, over a source that does."""
         offender = 'INTERFACE = "org.kde.kstars.Ekos.Capture"'
         assert any(f"org.kde.kstars.Ekos.{node}" in offender for node in ("Capture", "Focus"))
+
+
+class TestTheMountModuleTheBridgeDrives:
+    """``/KStars/Ekos/Mount`` — the first Ekos module Nocturne actually uses.
+
+    Everything here is checked against the recording, never against
+    ``fake_kstars.py``. The stub is checked *by* it, exactly as the INDI stub is.
+    """
+
+    def test_the_path_is_a_child_of_the_ekos_object(self) -> None:
+        assert f"{ekos.EKOS_PATH}/Mount" == ekos.EKOS_MOUNT_PATH
+        assert "Mount" in running_child_nodes()[ekos.EKOS_PATH]
+
+    def test_the_path_exports_the_interface_the_bridge_asks_for(self) -> None:
+        exported = running_objects()[ekos.EKOS_MOUNT_PATH]
+        assert ekos.EKOS_MOUNT_INTERFACE in exported, sorted(
+            set(exported) - STANDARD_INTERFACES
+        )
+
+    def test_it_did_not_exist_before_ekos_was_started(self) -> None:
+        """Why ``attach_modules`` is separate from ``connect``, as evidence."""
+        assert ekos.EKOS_MOUNT_PATH not in exported_objects()
+        assert "Mount" not in exported_child_nodes()[ekos.EKOS_PATH]
+
+    def test_every_required_mount_method_exists(self) -> None:
+        missing = sorted(ekos.REQUIRED_MOUNT_METHODS - mount().method_names())
+        assert not missing, missing
+
+    def test_the_required_set_is_not_empty(self) -> None:
+        """An empty set has no missing members either."""
+        assert len(ekos.REQUIRED_MOUNT_METHODS) == 4
+        assert "slew" in ekos.REQUIRED_MOUNT_METHODS
+
+    def test_a_mount_method_kstars_does_not_have_is_reported_missing(self) -> None:
+        """The positive control for the check above."""
+        invented = frozenset({"slew", "flipNow"})
+        assert sorted(invented - mount().method_names()) == ["flipNow"]
+
+    def test_slew_takes_two_doubles_and_returns_a_boolean(self) -> None:
+        overloads = mount().methods["slew"]
+        assert len(overloads) == 1
+        assert overloads[0].in_signature == "dd"
+        assert overloads[0].out_signature == "b"
+        assert overloads[0].argument_names == ("", "RA", "DEC")
+
+    @pytest.mark.parametrize("member", ["park", "unpark", "abort"])
+    def test_the_others_take_nothing_and_return_a_boolean(self, member: str) -> None:
+        overloads = mount().methods[member]
+        assert len(overloads) == 1
+        assert overloads[0].in_signature == ""
+        assert overloads[0].out_signature == "b"
+
+
+class TestTheMountMethodsNocturneRefusesToCall:
+    """ADR 0022, kept where a later refactor cannot quietly undo it."""
+
+    def test_each_one_really_is_offered_by_kstars(self) -> None:
+        """Otherwise "we do not call it" would be true for the wrong reason.
+
+        A forbidden list naming methods KStars does not have would pass the
+        source check below while forbidding nothing at all.
+        """
+        missing = sorted(set(ekos.FORBIDDEN_MOUNT_METHODS) - mount().method_names())
+        assert not missing, missing
+
+    def test_the_forbidden_list_is_not_empty(self) -> None:
+        assert len(ekos.FORBIDDEN_MOUNT_METHODS) >= 5
+
+    def test_none_of_them_appears_in_the_bridges_call_set(self) -> None:
+        overlap = sorted(set(ekos.FORBIDDEN_MOUNT_METHODS) & ekos.REQUIRED_MOUNT_METHODS)
+        assert overlap == []
+
+    @pytest.mark.parametrize("member", sorted(ekos.FORBIDDEN_MOUNT_METHODS))
+    def test_the_bridge_never_calls_one(self, member: str) -> None:
+        """The names may be *listed* — that is what the reasons are for — but
+        never passed to ``_call``, which is the only thing that reaches KStars."""
+        source = inspect.getsource(ekos)
+        assert f'"{member}"' not in source.replace(f'"{member}": ', "")
+
+    def test_that_source_check_can_fail(self) -> None:
+        """The positive control: the same detector, over a call that makes one."""
+        offender = 'await self._call(self._mount_interface(), "sync", ra, dec)'
+        assert '"sync"' in offender.replace('"sync": ', "")
+
+    def test_every_method_kstars_offers_is_either_called_or_refused(self) -> None:
+        """No third category. A method in neither list is one nobody decided on."""
+        undecided = sorted(
+            mount().method_names()
+            - ekos.REQUIRED_MOUNT_METHODS
+            - set(ekos.FORBIDDEN_MOUNT_METHODS)
+        )
+        assert undecided == [], (
+            f"the mount module offers {undecided}, which Nocturne neither calls nor "
+            "refuses. Decide: add it to REQUIRED_MOUNT_METHODS with the command that "
+            "uses it, or to FORBIDDEN_MOUNT_METHODS with the reason (ADR 0022)"
+        )
+
+    def test_the_partition_covers_something(self) -> None:
+        """Two empty lists partition an empty interface perfectly."""
+        assert len(mount().method_names()) == 9
+
+
+class TestTheUnitsWereReadFromTheSourceNotAssumed:
+    """The one thing introspection cannot record, recorded anyway.
+
+    ``slew(RA: d, DEC: d)`` is all the XML says. Whether that first double is
+    hours or degrees is a factor of fifteen between the target and somewhere
+    else, and no signature check would ever catch it.
+    """
+
+    def test_the_recording_says_right_ascension_is_in_hours(self) -> None:
+        text = mount_units_documentation()
+        assert "@param RA Right ascention is hours." in text
+        assert "@param DEC Declination in degrees." in text
+
+    def test_the_recording_says_the_frame_is_jnow(self) -> None:
+        assert "Slew the mount to the RA/DEC (JNow)." in mount_units_documentation()
+
+    def test_the_recording_says_the_boolean_means_sent_not_done(self) -> None:
+        assert "true if the command is sent successfully" in mount_units_documentation()
+
+    def test_the_bridge_documents_the_same_units(self) -> None:
+        """A future editor changing one without the other fails here."""
+        docstring = inspect.getdoc(ekos.EkosBridge.mount_slew) or ""
+        assert "hours" in docstring
+        assert "degrees" in docstring
+        assert "JNow" in docstring
+
+    def test_it_covers_every_method_the_bridge_calls(self) -> None:
+        text = mount_units_documentation()
+        for member in sorted(ekos.REQUIRED_MOUNT_METHODS):
+            assert f"bool {member}(" in text, member
+
+    def test_the_detector_would_notice_a_missing_declaration(self) -> None:
+        """The positive control for the check above."""
+        text = mount_units_documentation()
+        assert "bool flipNow(" not in text
+
+
+class TestTheMountStubMatchesTheRecordedSignatures:
+    """The stub cannot be allowed to agree with the bridge instead of KStars."""
+
+    def stub_signature(self, member: str) -> tuple[str, str]:
+        annotations = dict(
+            inspect.get_annotations(getattr(fake_kstars.FakeMountInterface, member))
+        )
+        out = annotations.pop(_RETURN, "")
+        return "".join(annotations.values()), out
+
+    @pytest.mark.parametrize("member", ["slew", "park", "unpark", "abort"])
+    def test_it_declares_what_kstars_declares(self, member: str) -> None:
+        recorded = mount().methods[member][0]
+        assert self.stub_signature(member) == (
+            recorded.in_signature,
+            recorded.out_signature,
+        )
+
+    def test_the_stub_offers_everything_the_bridge_requires(self) -> None:
+        exported = {
+            name
+            for name, member in inspect.getmembers(
+                fake_kstars.FakeMountInterface, inspect.isfunction
+            )
+            if not name.startswith("_")
+        }
+        assert exported >= ekos.REQUIRED_MOUNT_METHODS, sorted(exported)
+
+    def test_the_stub_offers_none_of_the_refused_ones(self) -> None:
+        """A stub that answered ``sync`` would make calling it look harmless."""
+        exported = {
+            name
+            for name, member in inspect.getmembers(
+                fake_kstars.FakeMountInterface, inspect.isfunction
+            )
+            if not name.startswith("_")
+        }
+        assert exported & set(ekos.FORBIDDEN_MOUNT_METHODS) == set()
+
+    def test_the_minimal_stub_really_is_missing_something(self) -> None:
+        """It exists to make the bridge's containment check fire; if it offered
+        everything, the test built on it would prove the opposite of its name."""
+        exported = {
+            name
+            for name, member in inspect.getmembers(
+                fake_kstars.MinimalMountInterface, inspect.isfunction
+            )
+            if not name.startswith("_")
+        }
+        assert ekos.REQUIRED_MOUNT_METHODS - exported

@@ -15,6 +15,12 @@ KStars 3.8.3 (commit ``61d849b0``) — see ``docs/ekos-dbus-capture.md``:
     The same, after ``Ekos.start`` on the Simulators profile. Twenty-four paths,
     including the module objects and the optical train.
 
+``hardware/kstars-mount-dbus-units.txt``
+    The doxygen comments on the mount module's methods, from the KStars source
+    at the pinned commit. What the XML cannot say: that ``slew``'s first double
+    is hours and not degrees, that the frame is JNow, and that the boolean means
+    the command was *sent*.
+
 The distinction between declared and exported is not pedantry. A method in the
 first and not the second is an object that has not been created yet —
 ``/KStars/Ekos/Capture`` does not exist until Ekos starts, which is exactly what
@@ -40,6 +46,13 @@ HARDWARE = Path(__file__).parent / "hardware"
 DECLARED_DUMP: Final = HARDWARE / "kstars-dbus-interfaces.xml"
 EXPORTED_DUMP: Final = HARDWARE / "kstars-live-at-rest.xml"
 RUNNING_DUMP: Final = HARDWARE / "kstars-ekos-running.xml"
+
+#: The doxygen comments on the mount module's DBus methods, copied from the
+#: KStars source at the commit ``scripts/install.sh`` pins. Introspection
+#: records the *signature* of ``slew`` and nothing about what its two doubles
+#: mean; this records the units and the frame, which is the part that decides
+#: where the telescope actually goes.
+MOUNT_UNITS_DUMP: Final = HARDWARE / "kstars-mount-dbus-units.txt"
 
 #: Sections are introduced by a line the capture script printed. One source file
 #: ended without a newline, so the marker can begin mid-line; matching on the
@@ -247,3 +260,18 @@ __all__ = [
     "running_child_nodes",
     "running_objects",
 ]
+
+
+def mount_units_documentation() -> str:
+    """The mount module's method documentation, as fetched from the source.
+
+    Raises:
+        AssertionError: if the file is missing its content. A helper that
+            quietly returned an empty string would let every assertion built on
+            it pass over nothing (CLAUDE.md section 2).
+    """
+    text = MOUNT_UNITS_DUMP.read_text(encoding="utf-8")
+    assert "Q_INVOKABLE Q_SCRIPTABLE bool slew(double RA, double DEC);" in text, (
+        f"{MOUNT_UNITS_DUMP} no longer contains the slew declaration it exists for"
+    )
+    return text

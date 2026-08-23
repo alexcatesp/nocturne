@@ -1,0 +1,133 @@
+===== KStars Ekos Mount, DBus method documentation
+Source : kstars/ekos/mount/mount.h
+Repo   : https://invent.kde.org/education/kstars
+         (read through the GitHub mirror https://github.com/KDE/kstars)
+Commit : 61d849b04c42217cf2f0ab956153e56a928ae8a8
+         the ref scripts/install.sh pins as KSTARS_REF, tag stable-3.8.3
+Fetched: 2026-08-23
+
+Why this file exists
+--------------------
+kstars-dbus-interfaces.xml and kstars-ekos-running.xml record that
+org.kde.kstars.Ekos.Mount.slew takes two doubles named RA and DEC. They do not
+record what those doubles mean. DBus has no notion of units, so a right
+ascension sent in degrees is accepted by the signature and points the telescope
+somewhere else entirely — the failure mode issue #2 exists to prevent, in a
+place introspection cannot reach.
+
+The doxygen comments below are the answer, copied verbatim from the source of
+the build that runs on the reference rig. Everything Nocturne calls is here,
+and so is everything it deliberately does not call (ADR 0022).
+
+Verbatim excerpt
+----------------
+        /** DBUS interface function.
+             * Slew the mount to the RA/DEC (JNow).
+             * @param RA Right ascention is hours.
+             * @param DEC Declination in degrees.
+             * @return true if the command is sent successfully, false otherwise.
+             */
+        Q_INVOKABLE Q_SCRIPTABLE bool slew(double RA, double DEC);
+
+        /** DBUS interface function.
+             * Slew the mount to the target. Target name must be valid in KStars.
+             * @param target name
+             * @return true if the command is sent successfully, false otherwise.
+             */
+        Q_INVOKABLE Q_SCRIPTABLE bool gotoTarget(const QString &target);
+
+        /** DBUS interface function.
+             * Sync the mount to the RA/DEC (JNow).
+             * @param RA Right ascention is hours.
+             * @param DEC Declination in degrees.
+             * @return true if the command is sent successfully, false otherwise.
+             */
+        Q_INVOKABLE Q_SCRIPTABLE bool sync(double RA, double DEC);
+
+        /** DBUS interface function.
+             * Sync the mount to the target. Target name must be valid in KStars.
+             * @param target name
+             * @return true if the command is sent successfully, false otherwise.
+             */
+        Q_INVOKABLE Q_SCRIPTABLE bool syncTarget(const QString &target);
+
+        /** DBUS interface function.
+             * Get equatorial coords (JNow). An array of doubles is returned. First element is RA in hours. Second elements is DEC in degrees.
+             */
+        Q_SCRIPTABLE QList<double> equatorialCoords();
+
+        /** DBUS interface function.
+             * Get Horizontal coords. An array of doubles is returned. First element is Azimuth in degrees. Second elements is Altitude in degrees.
+             */
+        Q_SCRIPTABLE QList<double> horizontalCoords();
+
+        /** DBUS interface function.
+             * Get Horizontal coords.
+             */
+        Q_SCRIPTABLE SkyPoint currentTarget();
+
+        /** DBUS interface function.
+             * Get mount hour angle in hours (-12 to +12).
+             */
+        Q_SCRIPTABLE double hourAngle();
+
+        /** DBUS interface function.
+             * Get the hour angle of that time the mount has slewed to the current position.
+             * This is used to manage the meridian flip for mounts which do not report pier side.
+             * only one attempt to flip is done.
+             */
+        Q_SCRIPTABLE double initialHA();
+
+        /** DBUS interface function.
+             * Aborts the mount motion
+             * @return true if the command is sent successfully, false otherwise.
+             */
+        Q_INVOKABLE Q_SCRIPTABLE bool abort();
+
+        /** DBUS interface function.
+             * Get the mount slew status ("Idle","Complete", "Busy", "Error")
+             */
+        Q_INVOKABLE Q_SCRIPTABLE IPState slewStatus();
+
+
+        /** DBUS interface function.
+             * Get the mount slew rate index 0 to N-1, or -1 if slew rates are not supported.
+             */
+        Q_INVOKABLE Q_SCRIPTABLE int slewRate();
+
+        Q_INVOKABLE Q_SCRIPTABLE bool setSlewRate(int index);
+
+        /** DBUS interface function.
+             * Reset mount model if supported by the mount.
+             * @return true if the command is executed successfully, false otherwise.
+             */
+        Q_INVOKABLE Q_SCRIPTABLE bool resetModel();
+
+        /** DBUS interface function.
+             * Can mount park?
+             */
+        Q_INVOKABLE Q_SCRIPTABLE bool canPark();
+
+        /** DBUS interface function.
+             * Park mount
+             */
+        Q_INVOKABLE Q_SCRIPTABLE bool park();
+
+        /** DBUS interface function.
+             * Unpark mount
+             */
+        Q_INVOKABLE Q_SCRIPTABLE bool unpark();
+
+        /** DBUS interface function.
+
+What Nocturne takes from this
+-----------------------------
+- slew(RA, DEC): RA in HOURS, DEC in DEGREES, frame JNow (equinox of date).
+  The same units and the same frame as INDI's EQUATORIAL_EOD_COORD and as
+  nocturne.safety.sky.SkyPosition, so no conversion happens anywhere.
+- The bool every one of them returns means "the command is sent successfully",
+  not that the mount accepted it and not that the motion finished.
+- gotoTarget and syncTarget take a name KStars resolves internally. The
+  governor never sees a coordinate, so it cannot check one. Refused (ADR 0022).
+- resetModel discards the mount's alignment model, which is the frame the
+  meridian band is measured in. Refused (ADR 0022).

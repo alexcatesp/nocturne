@@ -46,3 +46,25 @@ class IndiSettings(StrictModel):
 
     read_chunk_bytes: PositiveInt = 65536
     max_message_bytes: PositiveInt = MAX_MESSAGE_BYTES
+
+
+class EkosSettings(StrictModel):
+    """How patient the Ekos bridge is with KStars.
+
+    The module objects — ``/KStars/Ekos/Mount`` and its siblings — do not exist
+    on the bus until ``Ekos.start`` has run and Ekos has built them, which is
+    recorded rather than assumed: the two captures in
+    ``backend/tests/fixtures/hardware/`` are the same process twenty minutes and
+    one call apart, five exported paths before and twenty-four after. So
+    attaching to a module is a wait, and a wait needs a bound.
+    """
+
+    #: Waiting for the module objects to appear after ``Ekos.start``. Generous:
+    #: on the Pi, Ekos builds them while also starting indiserver and connecting
+    #: five drivers, and the cost of being impatient is a session that does not
+    #: start at all.
+    module_attach_timeout_s: PositiveFloat = 60.0
+    #: How often to re-introspect while waiting. There is no signal that says
+    #: "the module objects exist now" — ``ekosStatusChanged`` reports the
+    #: manager, not its children — so this polls.
+    module_poll_interval_s: PositiveFloat = 0.5

@@ -27,7 +27,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final, final
 
-from nocturne.safety.commands import Command, SetProperty
+from nocturne.safety.commands import (
+    AbortMotion,
+    Command,
+    ParkMount,
+    SetProperty,
+    SlewToCoordinates,
+    UnparkMount,
+)
 from nocturne.safety.sky import SkyPosition
 
 #: Vectors that command the mount to a position on the sky. A write to one of
@@ -137,6 +144,15 @@ def pointing_intent(command: Command) -> Classification | None:
     match command:
         case SetProperty(property=name, values=values):
             return _classify_property(name, values)
+        case SlewToCoordinates(ra_hours=ra_hours, dec_deg=dec_deg):
+            return _read_coordinates(ra_hours, dec_deg)
+        case ParkMount() | UnparkMount() | AbortMotion():
+            # None of the three names a place on the sky, so there is nothing
+            # for the limits to be checked against. Why that is accepted rather
+            # than treated as a gap is ADR 0022; the short form is that park and
+            # abort are the safe state itself, and unpark commands no motion of
+            # its own.
+            return None
         case _:
             # ConnectDevice and DisconnectDevice. Connecting a driver does not
             # command motion; what the mount does on connect is the driver's
@@ -194,6 +210,25 @@ def _read_position(name: str, values: Mapping[str, object]) -> Classification:
     except (TypeError, ValueError) as exc:
         return UnreadablePointing(
             detail=f"the coordinates written to {name} are not a position on the sky: {exc}"
+        )
+
+
+def _read_coordinates(ra_hours: float, dec_deg: float) -> Classification:
+    """A slew command's destination, or why it cannot be read as one.
+
+    Out-of-range coordinates are :class:`UnreadablePointing` rather than an
+    exception, so that nonsense is refused by the governor — with a reason, in
+    the decision log — instead of raising somewhere above it. The check is
+    :class:`~nocturne.safety.sky.SkyPosition`'s own, so there is one definition
+    of what a position is.
+    """
+    try:
+        return PointingIntent(
+            position=SkyPosition(ra_hours=_as_float(ra_hours), dec_deg=_as_float(dec_deg))
+        )
+    except (TypeError, ValueError) as exc:
+        return UnreadablePointing(
+            detail=f"the slew coordinates are not a position on the sky: {exc}"
         )
 
 
