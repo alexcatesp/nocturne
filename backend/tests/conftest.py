@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 from collections.abc import Iterator
 from pathlib import Path
@@ -11,6 +12,11 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = REPO_ROOT / "config"
+
+#: Redirects the calibration store away from the operator's real one. Kept as a
+#: literal rather than imported so that a rename in the package cannot silently
+#: point the whole suite back at ~/.local/share.
+DATA_DIR_VARIABLE = "NOCTURNE_DATA_DIR"
 
 
 @pytest.fixture(scope="session")
@@ -42,6 +48,31 @@ def writable_config_dir(tmp_path: Path) -> Path:
     directory = tmp_path / "config"
     shutil.copytree(CONFIG_DIR, directory)
     return directory
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _the_suite_never_touches_the_real_database(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[None]:
+    """Point the calibration store somewhere disposable, for the whole run.
+
+    ``default_database_path()`` resolves under the user's home directory. On the
+    reference rig that file holds the measured meridian limits, so a test that
+    reached it would be reading the operator's real calibration — and a test
+    whose result depends on whether the operator has calibrated is not a test.
+
+    The same reasoning as the configuration guard below, applied to the other
+    thing this suite could reach on a real machine.
+    """
+    previous = os.environ.get(DATA_DIR_VARIABLE)
+    os.environ[DATA_DIR_VARIABLE] = str(tmp_path_factory.mktemp("nocturne-data"))
+    try:
+        yield
+    finally:
+        if previous is None:
+            del os.environ[DATA_DIR_VARIABLE]
+        else:
+            os.environ[DATA_DIR_VARIABLE] = previous
 
 
 def _config_fingerprint() -> dict[str, str]:

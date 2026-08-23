@@ -212,11 +212,15 @@ class TestMeridianCalibrationCoupling:
             SafetyConfig.model_validate(calibrated)
 
     def test_effective_limits_apply_the_safety_margin(self, calibrated: dict[str, Any]) -> None:
-        """SPEC section 9.1.4: measured values MINUS the margin are enforced."""
+        """SPEC section 9.1.4, read against the keep-out geometry of ADR 0020.
+
+        "Measured values minus the margin" means *more conservative*, and the
+        limits bracket a forbidden band, so the band grows at both edges.
+        """
         config = SafetyConfig.model_validate(calibrated)
         east, west = config.limits.meridian.effective_hour_angle_limits_deg()
-        assert east == pytest.approx(-20.0)  # -25 measured, 5 of margin
-        assert west == pytest.approx(15.0)  # +20 measured, 5 of margin
+        assert east == pytest.approx(-30.0)  # -25 measured, 5 of margin, wider
+        assert west == pytest.approx(25.0)  # +20 measured, 5 of margin, wider
 
     def test_effective_limits_are_unavailable_while_uncalibrated(
         self, config_dir: Path
@@ -225,8 +229,74 @@ class TestMeridianCalibrationCoupling:
         with pytest.raises(ValueError, match="not calibrated"):
             config.limits.meridian.effective_hour_angle_limits_deg()
 
-    def test_margin_may_not_exceed_the_measured_limit(self, calibrated: dict[str, Any]) -> None:
-        """A margin wider than the measurement would invert the limit."""
+    def test_a_margin_wider_than_the_measurement_is_fine_and_stricter(
+        self, calibrated: dict[str, Any]
+    ) -> None:
+        """It used to be refused, on the reading ADR 0020 corrected.
+
+        A margin of 40 against a measurement of -25 gives a band from -65: the
+        mount loses a great deal of sky and is in no danger whatsoever. Only a
+        margin that closes the circle is refused, and TestTheKeepOutBand covers
+        that.
+        """
         calibrated["limits"]["meridian"]["safety_margin_deg"] = 40.0
-        with pytest.raises(ValidationError, match="safety_margin_deg"):
+        east, west = SafetyConfig.model_validate(
+            calibrated
+        ).limits.meridian.effective_hour_angle_limits_deg()
+        assert east == pytest.approx(-65.0)
+        assert west == pytest.approx(60.0)
+
+
+class TestTheKeepOutBand:
+    """The limits bracket what is forbidden, not what is allowed — ADR 0020."""
+
+    def test_the_margin_widens_the_band_on_both_sides(self, calibrated: dict[str, Any]) -> None:
+        """The measured band is -25 to +20; the margin is 5; enforced is -30 to +25."""
+        meridian = SafetyConfig.model_validate(calibrated).limits.meridian
+        east, west = meridian.effective_hour_angle_limits_deg()
+        assert east == pytest.approx(-30.0)
+        assert west == pytest.approx(25.0)
+
+    def test_the_margin_never_lends_sky(self, calibrated: dict[str, Any]) -> None:
+        """Property, stated once: enforcement is always at least the measurement."""
+        meridian = SafetyConfig.model_validate(calibrated).limits.meridian
+        east, west = meridian.effective_hour_angle_limits_deg()
+        measured_east = calibrated["limits"]["meridian"]["hour_angle_east_limit_deg"]
+        measured_west = calibrated["limits"]["meridian"]["hour_angle_west_limit_deg"]
+        assert east <= measured_east
+        assert west >= measured_west
+
+    def test_a_margin_that_forbids_the_whole_circle_is_refused(
+        self, calibrated: dict[str, Any]
+    ) -> None:
+        calibrated["limits"]["meridian"]["hour_angle_west_limit_deg"] = 179.0
+        calibrated["limits"]["meridian"]["safety_margin_deg"] = 5.0
+        with pytest.raises(ValidationError, match="whole circle"):
             SafetyConfig.model_validate(calibrated)
+
+
+class TestTheLatitudeTolerance:
+    """A calibration is only valid at the latitude it was measured at — ADR 0021."""
+
+    def test_the_shipped_file_carries_one(self, config_dir: Path) -> None:
+        meridian = load_safety_config(config_dir / "safety.yaml").limits.meridian
+        assert meridian.latitude_tolerance_deg > 0.0
+
+    @pytest.mark.parametrize("value", [0.0, -0.5])
+    def test_a_tolerance_that_is_not_positive_is_refused(
+        self, raw: dict[str, Any], value: float
+    ) -> None:
+        """Zero would mean no two GPS fixes ever agree, so nothing is ever calibrated."""
+        raw["limits"]["meridian"]["latitude_tolerance_deg"] = value
+        with pytest.raises(ValidationError):
+            SafetyConfig.model_validate(raw)
+
+    def test_it_is_small_enough_to_mean_something(self, config_dir: Path) -> None:
+        """A degree of latitude tilts the polar axis by a degree.
+
+        The shipped safety margin is what absorbs that, so the tolerance has to
+        stay a small fraction of it or a calibration would silently outlive the
+        geometry it was measured against.
+        """
+        meridian = load_safety_config(config_dir / "safety.yaml").limits.meridian
+        assert meridian.latitude_tolerance_deg <= meridian.safety_margin_deg / 5.0

@@ -20,6 +20,19 @@ limits:
     hour_angle_east_limit_deg: null   # measured by procedure in section 9.1
     hour_angle_west_limit_deg: null
     safety_margin_deg: 5
+
+    # The two limits above bracket the region the tube may NOT enter, not the
+    # region it may. A Newtonian points steeply near culmination and the mirror
+    # cell end swings down towards a leg; culmination is the meridian. So the
+    # margin WIDENS that band: measured -25 and +20 with a margin of 5 are
+    # enforced as "nothing between -30 and +25" (ADR 0020).
+
+    # Not a measurement of your tripod. How far the mount may travel before a
+    # calibration stops applying: the polar axis is tilted to your latitude, so
+    # the arc the tube sweeps past the legs changes with it. 0.5 deg is about
+    # 55 km of travel and a tenth of the safety margin above.
+    latitude_tolerance_deg: 0.5
+
     flip_strategy: "flip"        # "flip" | "stop"
     flip_settle_s: 30
     require_solve_after_flip: true

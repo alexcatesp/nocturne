@@ -26,6 +26,9 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "hypothesis>=6.100",
+    # The oracle for the ephemeris arithmetic in nocturne/safety/sky.py, and a
+    # test dependency only: the safety path must not import it (ADR 0018).
+    "astropy>=6.0",
     "ruff>=0.5",
     "mypy>=1.10",
     "types-PyYAML",
@@ -86,6 +89,12 @@ disallow_any_explicit = false  # justified per-use with a comment; see CLAUDE.md
 files = ["backend/nocturne", "backend/tests"]
 mypy_path = "backend"
 
+# astropy is the oracle the ephemeris tests compare against (ADR 0018). It ships
+# no stubs, and it is imported by tests only — never by the package.
+[[tool.mypy.overrides]]
+module = ["astropy.*"]
+ignore_missing_imports = true
+
 [[tool.mypy.overrides]]
 module = ["dbus_next.*"]
 ignore_missing_imports = true
@@ -102,8 +111,10 @@ disable_error_code = ["name-defined", "untyped-decorator", "no-any-return", "val
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]
 asyncio_mode = "auto"
-# -rxX prints expected failures in every run, so the deferred safety limits of
-# issue #1 are visible on every CI page rather than buried.
+# -rxX prints expected failures and unexpected passes in every run. The suite
+# carries no xfail today — issue #1's deferred pointing limits were the last of
+# them and they are now enforced — and this is what makes the next one visible
+# on the CI page rather than buried in the dots.
 addopts = "-rxX"
 markers = [
     "indi: integration test that requires the INDI simulator drivers on PATH",

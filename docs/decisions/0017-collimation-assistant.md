@@ -99,7 +99,10 @@ Four consequences of the decision are load-bearing enough to be part of it:
 ## Consequences
 
 - **`SetProperty` gating (issue #1, ADR 0007) becomes a prerequisite, not a
-  backlog item.** The assistant needs camera ROI and focuser moves; if those go
+  backlog item.** *(Update, 2026-08-22: the pointing half of that gate landed as
+  the first work of M2 — a mount coordinate write is now checked, and open-loop
+  motion refused. The allowlist described below has not been built, and remains
+  this assistant's prerequisite.)* The assistant needs camera ROI and focuser moves; if those go
   through direct INDI they go through the ungated path. A feature that exists so
   a person can stand next to the telescope must not be what reopens an unchecked
   route to the mount. Its writes are restricted to an allowlist of camera and

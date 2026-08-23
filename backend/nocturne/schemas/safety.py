@@ -50,6 +50,20 @@ class MeridianLimits(StrictModel):
 
     Hour angle sign convention (SPEC section 7.2): negative east of the
     meridian, positive west of it.
+
+    **The two limits bracket a region the tube may not enter** — they are not
+    the edges of a permitted range (ADR 0020). A Newtonian points steeply near
+    culmination, and the end of the tube carrying the primary mirror cell swings
+    *down* as it does, towards a tripod leg. Culmination is the meridian, so the
+    forbidden region is the band around hour angle zero and the sky outside it
+    is free. This is why the measured limits are what triggers the flip:
+    ``hour_angle_east_limit_deg`` is where you stop or flip on the way in, and
+    ``hour_angle_west_limit_deg`` is where you may resume on the way out.
+
+    ``latitude_tolerance_deg`` is not a measurement of the tripod. It says how
+    far the rig may travel before a calibration measured somewhere else stops
+    applying, which matters because the calibration tool records the site it was
+    measured at (ADR 0021).
     """
 
     calibrated: bool
@@ -57,6 +71,13 @@ class MeridianLimits(StrictModel):
     hour_angle_east_limit_deg: Annotated[float, Field(ge=-180.0, lt=0.0)] | None = None
     hour_angle_west_limit_deg: Annotated[float, Field(gt=0.0, le=180.0)] | None = None
     safety_margin_deg: Annotated[float, Field(ge=0.0, le=90.0)]
+
+    #: How far the site may move before a measured profile stops applying. The
+    #: mount's polar axis is tilted to the latitude, so the arc the tube sweeps
+    #: past the tripod legs is a function of it: a calibration measured at one
+    #: latitude is not valid at another (SPEC section 9.1.7 applies the same
+    #: reasoning to the counterweight).
+    latitude_tolerance_deg: Annotated[float, Field(gt=0.0, le=90.0)]
     flip_strategy: FlipStrategy
     flip_settle_s: Annotated[float, Field(ge=0.0)]
     require_solve_after_flip: bool
@@ -99,24 +120,42 @@ class MeridianLimits(StrictModel):
         return self
 
     @model_validator(mode="after")
-    def _margin_does_not_swallow_the_measurement(self) -> Self:
+    def _the_widened_band_still_leaves_a_sky(self) -> Self:
+        """The margin widens the forbidden band; it must not close the circle.
+
+        Under the keep-out reading of ADR 0020 the margin can never invert the
+        limits — a wider band is a stricter one. What it *can* do, with absurd
+        numbers, is forbid every hour angle there is, and a configuration that
+        refuses the whole sky should say so at load rather than at three in the
+        morning.
+        """
         east = self.hour_angle_east_limit_deg
         west = self.hour_angle_west_limit_deg
         if east is None or west is None:
             return self
-        if self.safety_margin_deg >= abs(east) or self.safety_margin_deg >= west:
+        if east - self.safety_margin_deg <= -180.0 or west + self.safety_margin_deg >= 180.0:
             raise ValueError(
-                f"safety_margin_deg ({self.safety_margin_deg}) is not smaller than "
-                f"the measured limits ({east}, {west}); applying it would invert "
-                "the usable range"
+                f"the measured limits ({east}, {west}) widened by "
+                f"safety_margin_deg ({self.safety_margin_deg}) span the whole circle; "
+                "no hour angle would ever be permitted"
             )
         return self
 
     def effective_hour_angle_limits_deg(self) -> tuple[float, float]:
-        """Enforced limits: the measured values narrowed by the safety margin.
+        """The enforced **forbidden** band: the measurement widened by the margin.
 
-        SPEC section 9.1.4. Raises ``ValueError`` while uncalibrated — there is
-        no permissive fallback.
+        SPEC section 9.1.4 says "measured values minus ``safety_margin_deg``
+        become the enforced hard limits". Read against the keep-out geometry of
+        ADR 0020 that means *more conservative*, which on the eastern edge is
+        literally minus and on the western edge is plus: clearance ran out at
+        the measured hour angle, so the band the tube may not enter starts
+        earlier and ends later than what was measured.
+
+        Returns ``(east, west)`` with ``east < 0 < west``. **A target is refused
+        when its hour angle lies strictly between them.**
+
+        Raises ``ValueError`` while uncalibrated — there is no permissive
+        fallback.
         """
         if (
             not self.calibrated
@@ -128,8 +167,8 @@ class MeridianLimits(StrictModel):
                 "derived. Run docs/meridian-calibration.md."
             )
         return (
-            self.hour_angle_east_limit_deg + self.safety_margin_deg,
-            self.hour_angle_west_limit_deg - self.safety_margin_deg,
+            self.hour_angle_east_limit_deg - self.safety_margin_deg,
+            self.hour_angle_west_limit_deg + self.safety_margin_deg,
         )
 
 

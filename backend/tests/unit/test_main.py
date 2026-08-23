@@ -159,3 +159,67 @@ class TestCheckConfig:
     ) -> None:
         assert main(["check-config", "--config-dir", str(tmp_path / "absent")]) != 0
         assert "absent" in capsys.readouterr().err
+
+
+class TestTheMeridianReport:
+    """What the governor will refuse, and on whose authority — ADR 0021."""
+
+    def record_a_calibration(self, config_dir: Path) -> None:
+        from datetime import UTC, datetime
+
+        from nocturne.schemas import load_config_bundle
+        from nocturne.store import (
+            CalibrationStore,
+            MeridianMark,
+            RecordedCalibration,
+            default_database_path,
+        )
+
+        equipment = load_config_bundle(config_dir).equipment
+        when = datetime(2026, 8, 23, 11, 0, tzinfo=UTC)
+        CalibrationStore(default_database_path()).record(
+            RecordedCalibration(
+                recorded_at=when,
+                latitude_deg=equipment.site.latitude,
+                longitude_deg=equipment.site.longitude,
+                counterweight_fitted=equipment.mount.counterweight_fitted,
+                optical_train_id=equipment.active_optical_train.id,
+                marks=(
+                    MeridianMark("east", -25.0, 20.0, 68.0, "west", when),
+                    MeridianMark("west", 20.0, 20.0, 66.0, "east", when),
+                ),
+            )
+        )
+
+    def test_checking_the_configuration_does_not_create_the_database(
+        self, config_dir: Path
+    ) -> None:
+        """A command run to look at things must not initialise anything."""
+        from nocturne.store import default_database_path
+
+        assert not default_database_path().exists()
+        main(["check-config", "--config-dir", str(config_dir)])
+        assert not default_database_path().exists()
+
+    def test_a_stored_calibration_is_reported_with_its_band_and_its_source(
+        self, config_dir: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self.record_a_calibration(config_dir)
+        try:
+            main(["check-config", "--config-dir", str(config_dir)])
+            out = capsys.readouterr().out
+            # -25 and +20 measured, widened by the shipped 5 degrees of margin.
+            assert "no pointing between -30.0 and +25.0" in out
+            assert "measured 2026-08-23" in out
+        finally:
+            from nocturne.store import default_database_path
+
+            default_database_path().unlink()
+
+    def test_without_one_the_report_says_nothing_will_point(
+        self, config_dir: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        main(["check-config", "--config-dir", str(config_dir)])
+        out = capsys.readouterr().out
+        assert "NOT CALIBRATED" in out
+        assert "in any mode" in out

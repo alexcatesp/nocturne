@@ -172,7 +172,25 @@ Assume they will read your summary on a phone, at night, on a terrace.
 
 ## 10. Current state
 
-Milestone: **M1 complete.** Branch `m1/instrument-control`. Do not start M2.
+Milestone: **M2 in progress.** Branch `m2/ekos-parity`. M1 is complete.
+
+**The first slice of M2 has landed: the pointing gate.** Every command that
+names a place on the sky is now checked against the altitude window, the Sun and
+the meridian hour angle before it reaches the transport, and issue #1 is closed.
+Two things follow that are not obvious from the code:
+
+- **Nothing points until the operator calibrates.** While `meridian.calibrated`
+  is false, every pointing command is refused at every autonomy level — not just
+  the unattended ones (ADR 0019). The daylight procedure in
+  `docs/meridian-calibration.md` is now on M2's critical path.
+- **Nothing points from the placeholder site either.** The governor takes the
+  observing site and refuses to compute an altitude for coordinates that are
+  still the shipped 45.0 / 0.0 (`config/equipment.local.yaml` is where the real
+  ones go).
+
+The governor also takes a clock now, read once per decision, and the ephemeris
+it needs is computed in `safety/sky.py` rather than imported — `astropy` is a
+test oracle and must never become a runtime dependency (ADR 0018).
 
 **Done, on real hardware.** All five devices pass. The Wave 150i connects to
 `indi_eqmod_telescope` over direct USB serial with no SynScan bridge — the M1 HITL mount
@@ -223,8 +241,16 @@ passed, because the stub shared the misconception. It is now `connect_indiserver
 *Using* the Ekos modules — align, focus, guide, capture, flip — is M2 and does not start;
 their objects do not exist until Ekos is started and none has been introspected live.
 
-**Known limitations, each with a red test or a tracked issue.** `SetProperty` is
-ungated, so a raw property write can still slew the mount (ADR 0007, issue #1, three
-`xfail(strict=True)` tests). The semantics of `RASTATUS.RARunning` are unknown, and a
-structural test forbids the name appearing in the package until they are established
-(issue #3).
+**Known limitations, each with a red test or a tracked issue.** The semantics of
+`RASTATUS.RARunning` are unknown, and a structural test forbids the name appearing in
+the package until they are established (issue #3). The suite carries **no `xfail`**:
+issue #1's deferred pointing limits were the last of them, and they are enforced now
+(ADR 0007, closed).
+
+**What the pointing gate does not cover, and it is written into ADR 0019 rather than
+left to be discovered.** It validates the destination of a command at the instant the
+command is issued. It does not re-check a target that tracking carries into a limit
+forty minutes later; that continuous watch, and the flip it triggers, belong to the
+session layer and are not built. ADR 0010's second enforcement layer in the driver is
+also still unimplemented, and until it is, nothing may write the driver's own
+`HORIZONLIMITS*` vectors — the governor refuses them.

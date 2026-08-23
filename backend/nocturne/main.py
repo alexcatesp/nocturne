@@ -14,16 +14,19 @@ import argparse
 import sys
 from pathlib import Path
 
+from nocturne.calibration import resolve_measured_band
 from nocturne.devices import (
     MissingSerialDeviceError,
     describe_configured_port,
     require_configured_port,
 )
+from nocturne.safety import MeasuredBand
 from nocturne.schemas import ConfigError, NocturneConfig, load_config_bundle
 from nocturne.schemas.equipment import Site
 from nocturne.schemas.layering import Override
 from nocturne.schemas.loader import ConfigSources, FileSources
 from nocturne.storage import describe_storage, inspect_storage
+from nocturne.store import CalibrationStore, default_database_path
 
 DEFAULT_CONFIG_DIR = Path("config")
 
@@ -35,23 +38,12 @@ REPORTED_FILESYSTEM = Path("/")
 
 def _format_report(config: NocturneConfig) -> str:
     equipment = config.equipment
-    meridian = config.safety.limits.meridian
     scale = equipment.imaging_plate_scale_arcsec_per_px()
     fov_width, fov_height = equipment.imaging_fov_arcmin()
     guide_scale = equipment.guide_plate_scale_arcsec_per_px()
     train = equipment.active_optical_train
 
-    if meridian.calibrated:
-        east, west = meridian.effective_hour_angle_limits_deg()
-        meridian_line = (
-            f"  Meridian:      calibrated {meridian.calibration_date}, "
-            f"enforced hour angle {east:+.1f} deg to {west:+.1f} deg"
-        )
-    else:
-        meridian_line = (
-            "  Meridian:      NOT CALIBRATED — supervised and autonomous modes are "
-            "refused (SPEC section 9.1). See docs/meridian-calibration.md."
-        )
+    meridian_line = _meridian_line(config, measured_band(config))
 
     return "\n".join(
         [
@@ -83,6 +75,52 @@ def _format_report(config: NocturneConfig) -> str:
             meridian_line,
             *_source_lines(config.sources),
         ]
+    )
+
+
+def measured_band(config: NocturneConfig) -> MeasuredBand | None:
+    """The measured calibration in force, without creating anything.
+
+    ``check-config`` validates; it does not initialise. Opening the store would
+    create the database file as a side effect of a command the operator runs to
+    look at things, so a store that does not exist yet is simply reported as
+    absent.
+    """
+    path = default_database_path()
+    if not path.is_file():
+        return None
+    return resolve_measured_band(CalibrationStore(path), config.equipment, config.safety)
+
+
+def _meridian_line(config: NocturneConfig, measured: MeasuredBand | None) -> str:
+    """What the governor will refuse, and on whose authority.
+
+    The pair brackets the band the tube may not enter, not the range it may
+    (ADR 0020). Printing it as a range is how that misreading survived M1, so
+    this line states the refusal. And it names the source: with two possible
+    origins for the numbers (ADR 0021), "no pointing between -30 and +25" is
+    only half an answer without "says who".
+    """
+    meridian = config.safety.limits.meridian
+    bands: list[tuple[float, float]] = []
+    sources: list[str] = []
+    if meridian.calibrated:
+        bands.append(meridian.effective_hour_angle_limits_deg())
+        sources.append(f"safety.yaml, calibrated {meridian.calibration_date}")
+    if measured is not None:
+        margin = meridian.safety_margin_deg
+        bands.append((measured.east_deg - margin, measured.west_deg + margin))
+        sources.append(measured.source)
+    if not bands:
+        return (
+            "  Meridian:      NOT CALIBRATED — nothing will be pointed at all, in any "
+            "mode (ADR 0019). See docs/meridian-calibration.md."
+        )
+    east = min(one for one, _ in bands)
+    west = max(other for _, other in bands)
+    return (
+        f"  Meridian:      no pointing between {east:+.1f} and {west:+.1f} deg of "
+        f"hour angle [{'; '.join(sources)}]"
     )
 
 

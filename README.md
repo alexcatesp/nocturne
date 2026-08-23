@@ -21,13 +21,18 @@ calls a constrained tool API, every call validated by a non-bypassable safety la
 > fitted and verified but no code reads them
 > ([`docs/FIELD-NOTES-TIMING.md`](docs/FIELD-NOTES-TIMING.md)).
 >
-> One M1 limitation is worth stating here: **a raw INDI property write is not yet gated
-> by the safety layer**, so it can still slew the mount
-> ([ADR 0007](docs/decisions/0007-m1-pointing-is-ungated.md), issue #1). The pointing
-> limits land in M2 and three tests are red on purpose until they do.
+> The M1 limitation that used to be stated here — a raw property write could slew the
+> mount past every limit — **is fixed**. Every command that names a place on the sky is
+> checked against the altitude window, the Sun and the meridian hour angle before it
+> reaches the driver ([ADR 0007](docs/decisions/0007-m1-pointing-is-ungated.md) is
+> closed).
 >
-> This software moves a telescope. Do not run it unattended until you have completed the
-> meridian calibration procedure for your own mount and tripod.
+> This software moves a telescope, and it now refuses to until you tell it where the
+> tripod stops it: **while the meridian limits are uncalibrated, every slew is rejected**
+> ([ADR 0019](docs/decisions/0019-no-pointing-while-uncalibrated.md)). Run the procedure
+> in [`docs/meridian-calibration.md`](docs/meridian-calibration.md) for your own mount
+> and tripod, and put your site coordinates in `config/equipment.local.yaml`, before
+> anything will point.
 
 ---
 
