@@ -73,6 +73,7 @@ from .safety import (
     NotifySeverity,
     OnAbort,
     SafetyConfig,
+    TargetingLimits,
 )
 
 __all__ = [
@@ -126,6 +127,7 @@ __all__ = [
     "SafetyConfig",
     "Site",
     "StrictModel",
+    "TargetingLimits",
     "TemperatureCompensation",
     "is_local_path",
     "load_agent_config",

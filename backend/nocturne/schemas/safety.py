@@ -179,6 +179,38 @@ class CoolingLimits(StrictModel):
     abort_if_power_draw_exceeds_percent: Percent
 
 
+class TargetingLimits(StrictModel):
+    """Limits on what may change the mount's model, or name its target.
+
+    SPEC section 9.1 states the limits in a frame — hour angle, altitude — and
+    says nothing about what may move that frame. Two things can: a sync, which
+    tells the mount it is somewhere other than where it thought, and a target
+    named rather than pointed at, whose coordinates are resolved by KStars
+    against KStars' own clock. Both are needed for M2 and both are bounded here
+    rather than refused (ADR 0023).
+    """
+
+    #: How far a sync may move the mount's model of where it is, in degrees of
+    #: arc between the position the mount reports and the position being synced
+    #: to. A plate solve after a cold slew is out by a mount's pointing error —
+    #: degrees, not tens of degrees. Something further than this is a solve on
+    #: the wrong field or a target confusion, and applying it silently rotates
+    #: the frame every limit in this file is measured in.
+    sync_tolerance_deg: Annotated[float, Field(gt=0.0, le=90.0)]
+
+    #: How far KStars' clock may differ from Nocturne's before a position it
+    #: resolved is refused, in seconds. KStars precesses a named object to the
+    #: instant *its own* clock reads, and that clock is simulated: it can be
+    #: stopped, or set to next Tuesday, without anything looking wrong.
+    #:
+    #: **The floor is not arbitrary.** KStars reports its clock only as a Julian
+    #: date printed to three decimal places, which quantises it to 86.4 seconds.
+    #: A limit below half of that would refuse a perfectly synchronised pair on
+    #: rounding alone — a check that fires when nothing is wrong is a check that
+    #: gets raised until it stops firing, and then it is not a check.
+    resolver_max_clock_skew_s: Annotated[float, Field(ge=120.0, le=3600.0)]
+
+
 class Limits(StrictModel):
     """Hard limits — SPEC sections 5.2, 9.1 and 9.2."""
 
@@ -187,6 +219,7 @@ class Limits(StrictModel):
     sun_avoidance_deg: Annotated[float, Field(ge=0.0, le=180.0)]
     sun_altitude_max_deg: Annotated[float, Field(ge=-90.0, le=90.0)]
     meridian: MeridianLimits
+    targeting: TargetingLimits
     cooling: CoolingLimits
 
     @model_validator(mode="after")

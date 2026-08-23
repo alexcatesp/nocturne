@@ -45,3 +45,11 @@
 #     # the legs changes with it: what you measured on the terrace is not valid
 #     # at a dark site 300 km south. 0.5 deg is about 55 km.
 #     latitude_tolerance_deg: 0.5
+#
+#   # Syncs and named targets (ADR 0023). Raise sync_tolerance_deg only if your
+#   # mount's cold pointing error genuinely exceeds it — the number exists to
+#   # catch a plate solve that landed on the wrong field, and a large value
+#   # catches nothing.
+#   targeting:
+#     sync_tolerance_deg: 5
+#     resolver_max_clock_skew_s: 300

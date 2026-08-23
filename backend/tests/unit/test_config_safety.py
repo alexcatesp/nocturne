@@ -65,6 +65,26 @@ class TestShippedFile:
         assert limits.meridian.require_solve_after_flip is True
         assert limits.cooling.max_delta_from_ambient_c == pytest.approx(35.0)
 
+    def test_the_targeting_limits_ship_with_the_values_adr_0023_argues_for(
+        self, config_dir: Path
+    ) -> None:
+        targeting = load_safety_config(config_dir / "safety.yaml").limits.targeting
+        assert targeting.sync_tolerance_deg == pytest.approx(5.0)
+        assert targeting.resolver_max_clock_skew_s == pytest.approx(300.0)
+
+    def test_the_sync_tolerance_is_smaller_than_the_sky(self, config_dir: Path) -> None:
+        """A tolerance that admits everything is not a tolerance.
+
+        The number exists to catch a plate solve that landed on the wrong
+        field. Shipped at a value large enough to accept any solve, it would
+        pass every test above while bounding nothing.
+        """
+        limits = load_safety_config(config_dir / "safety.yaml").limits
+        assert limits.targeting.sync_tolerance_deg < 90.0
+        # Tighter than the Sun avoidance circle, which is the smallest angular
+        # limit anything else in this file is stated in.
+        assert limits.targeting.sync_tolerance_deg < limits.sun_avoidance_deg
+
     def test_abort_conditions_match_spec_section_5_2(self, config_dir: Path) -> None:
         aborts = load_safety_config(config_dir / "safety.yaml").abort_conditions
         assert aborts.guiding_lost_s == 180
@@ -92,6 +112,33 @@ class TestStrictness:
         del raw["limits"]
         with pytest.raises(ValidationError, match="limits"):
             SafetyConfig.model_validate(raw)
+
+    def test_missing_targeting_section_is_rejected(self, raw: dict[str, Any]) -> None:
+        del raw["limits"]["targeting"]
+        with pytest.raises(ValidationError):
+            SafetyConfig.model_validate(raw)
+
+    def test_a_non_positive_sync_tolerance_is_rejected(self, raw: dict[str, Any]) -> None:
+        raw["limits"]["targeting"]["sync_tolerance_deg"] = 0
+        with pytest.raises(ValidationError):
+            SafetyConfig.model_validate(raw)
+
+    def test_a_clock_skew_below_the_reported_resolution_is_rejected(
+        self, raw: dict[str, Any]
+    ) -> None:
+        """KStars reports its clock quantised to 86.4 s (ADR 0023).
+
+        A limit under half of that refuses a perfectly synchronised pair on
+        rounding, which is how a real check gets relaxed until it is not one.
+        """
+        raw["limits"]["targeting"]["resolver_max_clock_skew_s"] = 30
+        with pytest.raises(ValidationError):
+            SafetyConfig.model_validate(raw)
+
+    def test_a_workable_clock_skew_is_accepted(self, raw: dict[str, Any]) -> None:
+        """Positive control: the floor rejects a number, not the field."""
+        raw["limits"]["targeting"]["resolver_max_clock_skew_s"] = 200
+        assert SafetyConfig.model_validate(raw).limits.targeting.resolver_max_clock_skew_s
 
     def test_missing_meridian_section_is_rejected(self, raw: dict[str, Any]) -> None:
         del raw["limits"]["meridian"]

@@ -37,6 +37,23 @@ limits:
     flip_settle_s: 30
     require_solve_after_flip: true
 
+  # SYNCS AND NAMED TARGETS — see section 9.1 and ADR 0023. Both of these
+  # bound something that can move the frame the limits above are measured in.
+  targeting:
+    # How far a plate-solve sync may move the mount's idea of where it is.
+    # A sync further than this is a solve on the wrong field, and applying it
+    # rotates the frame every limit in this file is expressed in.
+    sync_tolerance_deg: 5
+
+    # KStars resolves a target name against KStars' own clock, which is
+    # simulated and can be stopped or moved. A position precessed to the wrong
+    # instant looks entirely normal. 300 s is 1.25 deg of hour angle, a quarter
+    # of the meridian safety margin above. It is not tighter than that because
+    # KStars reports its clock as a Julian date to three decimals, which is a
+    # resolution of 86.4 s: a smaller limit would refuse a synchronised pair on
+    # rounding alone.
+    resolver_max_clock_skew_s: 300
+
   cooling:
     max_delta_from_ambient_c: 35
     abort_if_power_draw_exceeds_percent: 95
