@@ -16,9 +16,16 @@ calls a constrained tool API, every call validated by a non-bypassable safety la
 > passed, so the WiFi fallback is not taken ([ADR 0011](docs/decisions/0011-m1-mount-link-verified.md)).
 > What was learned doing it is in [`docs/FIELD-NOTES-M1.md`](docs/FIELD-NOTES-M1.md).
 >
-> **Nothing beyond M1 exists yet**: no plate solving, no guiding, no telemetry, no
-> stacking, no web app, no agent. A GPS/PPS receiver and environmental sensors are
-> fitted and verified but no code reads them
+> **M2 is under way.** Two slices have landed: the pointing gate, and the mount itself.
+> Nocturne can now slew, park, unpark and stop the mount through Ekos, and every one of
+> those goes through the safety governor before it reaches DBus — including which of the
+> mount module's calls are made at all
+> ([ADR 0022](docs/decisions/0022-the-ekos-mount-module-surface.md)).
+>
+> **The rest of M2 does not exist yet**: no plate solving, no autofocus, no guiding, no
+> sequenced capture, no meridian flip, no session state machine. Nor does anything
+> beyond it — no telemetry, no stacking, no web app, no agent. A GPS/PPS receiver and
+> environmental sensors are fitted and verified but no code reads them
 > ([`docs/FIELD-NOTES-TIMING.md`](docs/FIELD-NOTES-TIMING.md)).
 >
 > The M1 limitation that used to be stated here — a raw property write could slew the

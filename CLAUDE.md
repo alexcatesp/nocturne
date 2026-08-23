@@ -172,10 +172,36 @@ Assume they will read your summary on a phone, at night, on a terrace.
 
 ## 10. Current state
 
-Milestone: **M2 in progress.** Branch `m2/ekos-parity`. M1 is complete.
+Milestone: **M2 in progress.** M1 is complete. Work continues on `main`, which
+carries the merged `m2/ekos-parity` slices.
 
-**The first slice of M2 has landed: the pointing gate.** Every command that
-names a place on the sky is now checked against the altitude window, the Sun and
+**The second slice of M2 has landed: the mount moves, through the gate.**
+`Executor.slew`, `.park`, `.unpark` and `.abort_motion` drive the Ekos mount
+module at `/KStars/Ekos/Mount`, and each one is a command object the safety
+governor sees before anything reaches DBus. Four things are worth knowing before
+touching any of it:
+
+- **The mount module's surface is decided, not open** (ADR 0022). Nocturne calls
+  four of the nine methods it exports and refuses the other five by name, with a
+  reason each. A test asserts the two sets *partition* the interface, so a KStars
+  release that adds a method fails the suite rather than passing unnoticed.
+- **`sync` is among the refused five**, and so is `gotoTarget`. A sync moves the
+  frame every limit is measured in; a target name is resolved inside KStars where
+  the governor never sees a coordinate. Plate-solve syncs arrive with the align
+  module, which is the next slice and has not started.
+- **`slew`'s units came off the KStars source, not from memory.** The
+  introspection XML records two doubles named RA and DEC and nothing about what
+  they mean. Hours versus degrees is a factor of fifteen, so the doxygen comments
+  from the pinned commit are checked in beside the XML as
+  `kstars-mount-dbus-units.txt` and asserted against the bridge's own docstring.
+- **Attaching a module is a wait.** The module objects do not exist until
+  `Ekos.start` has run — the two recorded captures are the same process with five
+  exported paths and then twenty-four — so `attach_modules()` is separate from
+  `connect()`, polls with a timeout from `EkosSettings`, and drops its handle
+  when KStars restarts.
+
+**The first slice of M2 was the pointing gate.** Every command that
+names a place on the sky is checked against the altitude window, the Sun and
 the meridian hour angle before it reaches the transport, and issue #1 is closed.
 Two things follow that are not obvious from the code:
 
@@ -238,12 +264,17 @@ signature in `fake_kstars.py` — against them. One guess was wrong:
 `org.kde.kstars.INDI.connect` is `connect(host, port)` and attaches to an indiserver, so
 `connect_device()` was calling the wrong method with the wrong arity while every test
 passed, because the stub shared the misconception. It is now `connect_indiserver()`.
-*Using* the Ekos modules — align, focus, guide, capture, flip — is M2 and does not start;
-their objects do not exist until Ekos is started and none has been introspected live.
+The module objects **have** since been introspected live, running, and
+`kstars-ekos-running.xml` is the third recording in that directory. The mount
+module is driven (ADR 0022); align, focus, guide and capture are not, and the
+bridge does not name their interfaces — a structural test keeps it that way, so
+each arrives with the commands that use it rather than as a handle somebody
+finds.
 
 **Known limitations, each with a red test or a tracked issue.** The semantics of
 `RASTATUS.RARunning` are unknown, and a structural test forbids the name appearing in
-the package until they are established (issue #3). The suite carries **no `xfail`**:
+the package until they are established (issue #3) — it is the one open issue, and it
+needs a bench observation rather than code. The suite carries **no `xfail`**:
 issue #1's deferred pointing limits were the last of them, and they are enforced now
 (ADR 0007, closed).
 
@@ -253,4 +284,12 @@ command is issued. It does not re-check a target that tracking carries into a li
 forty minutes later; that continuous watch, and the flip it triggers, belong to the
 session layer and are not built. ADR 0010's second enforcement layer in the driver is
 also still unimplemented, and until it is, nothing may write the driver's own
-`HORIZONLIMITS*` vectors — the governor refuses them.
+`HORIZONLIMITS*` vectors — the governor refuses them. The same gap is why `unpark`
+carries no rules: it names no destination, and what happens after it is the watch that
+does not exist yet (ADR 0022).
+
+**Next, and in this order.** The align module — plate solve, centre, and the sync that
+comes with it — then focus, then guide and dithering, then sequenced capture, then the
+flip. The session state machine of SPEC §10.1 is what holds them together and is not
+started. M2's AUTO criterion is a full simulated sequence, so none of it is finished
+until that runs end to end.
