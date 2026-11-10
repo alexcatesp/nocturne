@@ -26,3 +26,4 @@ listed in SPEC.md section 4.
 | [0015](0015-gpsd-read-only-and-tx-unconnected.md) | Nothing writes to the GPS receiver: gpsd read-only, and the Pi's TX left unwired | Accepted |
 | [0016](0016-addendum-a-placement.md) | Addendum A ships as its own document and merges into SPEC.md before M3 | Accepted |
 | [0017](0017-collimation-assistant.md) | A defocused-star collimation assistant; the operator turns the screws | Accepted — implement in M4 |
+| [0018](0018-astroalex-plans-imaging-nights.md) | Astroalex plans imaging nights; Nocturne executes them | Accepted — SPEC amended per milestone |
