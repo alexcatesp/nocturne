@@ -244,8 +244,9 @@ through it costs about 10 €.
 
 ## When the new receiver arrives
 
-A genuine u-blox NEO-M8N is on order, and it brings PPS out on a proper header pin
-instead of an LED pad. When you swap it in:
+A genuine u-blox NEO-M8N and its 3 m active antenna **arrived on 2026-11-10** and are
+not yet fitted. It brings PPS out on a proper header pin instead of an LED pad. When you
+swap it in:
 
 - **The chrony fix in step 4 still applies.** It is about chrony, not about the receiver.
   This is the item that carries over.

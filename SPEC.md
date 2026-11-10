@@ -1488,7 +1488,8 @@ Tool surface, event bus, budget guard, decision log.
   `equipment.yaml`, and reading timing state through `chronyc -c tracking` rather than
   `/dev/pps0` — which is root-only, and the backend stays unprivileged — are M3/M6 work.
 - The GPS receiver is re-marked silicon of unknown vendor, not the u-blox NEO-6M its
-  label claims. A genuine NEO-M8N is on order; `docs/FIELD-NOTES-TIMING.md` §7 lists what
+  label claims. A genuine NEO-M8N with a 3 m active antenna arrived 2026-11-10, not yet
+  fitted; `docs/FIELD-NOTES-TIMING.md` §7 lists what
   carries over and what must be re-measured.
 - Collimation defocus in EAF steps is derived from `focuser.step_size_um` (§10.4.1), which
   is measured in M2. Until then the assistant ramps to the donut diameter empirically.

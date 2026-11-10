@@ -12,7 +12,7 @@ was measured, and which parts of the spec it satisfies or changes.
 
 Everything below was executed on the reference rig unless explicitly marked as pending.
 
-> ## Repository note — four things that moved between writing and filing
+> ## Repository note — five things that moved between writing and filing
 >
 > The body is the operator's text. These four are the editorial additions, kept here
 > rather than woven into the evidence.
@@ -49,6 +49,11 @@ Everything below was executed on the reference rig unless explicitly marked as p
 > actually needs when M3/M6 gets there, rather than tracking a tool that would then have
 > two versions. **Commands in this document that invoke them will not run from a fresh
 > clone.**
+>
+> **5. §7's replacement receiver has arrived.** The u-blox NEO-M8N and its 3 m active
+> antenna were received on 2026-11-10 and are not yet fitted. Nothing in §7 has been
+> re-measured. The eclipse logger of §0 now has its own repository,
+> `alexcatesp/eclipse-2027`; the VEML7700 and TSL2591 work continues there.
 
 ---
 
