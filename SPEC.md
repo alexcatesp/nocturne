@@ -1191,7 +1191,8 @@ GET    /api/v1/session/{id}/preview/{frame_id}     # JPEG, see §11.3
 POST   /api/v1/targets/search
 GET    /api/v1/targets/{id}/visibility             # altitude curve, moon, windows
 POST   /api/v1/targets/{id}/framing                # FOV overlay + rotation
-POST   /api/v1/plan                                # submit or approve a plan
+POST   /api/v1/plan                                # submit or approve a plan — §11.6
+GET    /api/v1/plan/schema                         # imaging plan JSON Schema — §11.6
 GET    /api/v1/agent/log
 POST   /api/v1/agent/autonomy
 POST   /api/v1/agent/approve/{proposal_id}
@@ -1241,6 +1242,87 @@ Auth: bearer token, even on LAN. An unauthenticated `POST /abort` is a lost nigh
 Non-negotiable default: red on black, no white surfaces, no bright accents, large touch
 targets. At 03:00, cold and dark-adapted, a white UI destroys half an hour of night
 vision. Implement as the default theme, with a day theme available for planning.
+
+### 11.6 Imaging plan file — the contract with Astroalex
+
+ADR 0018: the initial plan of an **imaging** night is written by Astroalex, on the
+operator's PC, before the night. This section is the file it writes and what Nocturne
+does with it. Photometry series (Addendum A §A.7) do not use it.
+
+**Ownership.** Nocturne owns the format, because Nocturne is what must validate it. The
+Pydantic model in `config/schemas/` is the source. A JSON Schema is generated from it,
+served at `GET /api/v1/plan/schema` and committed as `docs/schemas/imaging-plan-v1.json`
+for Astroalex to generate against. `extra="forbid"`, as everywhere else: an unknown field
+is a refusal, not something ignored.
+
+```json
+{
+  "format": "nocturne.imaging_plan",
+  "version": 1,
+  "plan_id": "0c6f1e0a-5d0b-4b8e-9a51-2f1c4d7e9b33",
+  "created_utc": "2026-11-14T17:02:11Z",
+  "generator": { "name": "astroalex", "version": "2.1.0" },
+  "night_of": "2026-11-14",
+  "site_check": { "latitude": 45.0, "longitude": 0.0 },
+  "optical_train": "mpcc",
+  "targets": [
+    {
+      "designation": "NGC 7000",
+      "common_name": "North America Nebula",
+      "ra_deg": 314.75, "dec_deg": 44.37,
+      "position_angle_deg": 90.0,
+      "priority": 1,
+      "filters": [
+        { "filter": "L", "integration_goal_min": 240 },
+        { "filter": "R", "integration_goal_min": 60 }
+      ],
+      "earliest_utc": null, "latest_utc": null,
+      "min_altitude_deg": 35,
+      "rationale": "Moon 22 % and 84° away; highest of the list until 23:30."
+    }
+  ]
+}
+```
+
+| Field | Meaning and rule |
+|---|---|
+| `format`, `version` | A version Nocturne does not support is refused, naming the versions it does. |
+| `plan_id`, `created_utc`, `generator` | Provenance. Stored with the approved plan; every frame record of the session carries `plan_id`. |
+| `night_of` | Local date on which the night starts. A plan for another night is refused. |
+| `site_check` | Coordinates **rounded to 0.1°** (~10 km): enough to catch a plan computed for the wrong site, not enough to be an address (§2.3). Refused if farther from the configured site than `plan.site_check_tolerance_km`. |
+| `optical_train` | Must be the active train. FOV, flats and focus all depend on it. |
+| `designation`, `ra_deg`, `dec_deg` | J2000. The coordinates are used as given, and the designation is only a label. |
+| `position_angle_deg` | Framing rotation, optional. Applied by solve-and-centre (M2). |
+| `priority` | 1 is highest. Ties are allowed; Nocturne orders ties by time to setting. |
+| `filters[].filter` | Must be a configured slot name (§5.1). `Dark` is refused. |
+| `filters[].integration_goal_min` | **Total** for the target, filter and optical train, not for this night. Nocturne subtracts what its archive already holds (§8.1 integration history), so a target re-planned on several nights is not shot twice over. |
+| `earliest_utc`, `latest_utc` | Optional, may only narrow the target's window. |
+| `min_altitude_deg` | Optional, may only **raise** the floor. A value below `safety.yaml` `altitude_min_deg` is refused, not clamped. |
+| `rationale` | Shown in the Plan view, as for agent proposals (§8.2). |
+
+**Deliberately absent.** Exposure, gain, offset, binning, dithering, focus, guiding,
+meridian handling and every §9 value. Exposure is solved live (§8.1); the rest belongs to
+the deterministic layer and the safety governor. A plan can only narrow what Nocturne would
+do. It can never widen it.
+
+**Lifecycle.**
+
+1. `POST /api/v1/plan` with the file. Validation, in order: schema → version → `night_of`
+   → `site_check` → `optical_train` → filters → per target, whether it clears
+   `max(altitude_min_deg, min_altitude_deg)` during astronomical darkness that night.
+2. A target that is never observable is **reported with its reason**, never silently
+   dropped. The plan is still accepted if at least one target is observable.
+3. The plan becomes a proposal in the Plan view (§11.4) and is approved according to the
+   current autonomy level (§8.4). Every slew it later causes passes `safety.validate()`
+   like any other command. Approval of a plan is not approval of a motion.
+4. During the session the agent may reorder, skip, or declare done targets **of the
+   approved plan** (§8.1). A target absent from it enters only through a new proposal,
+   which the operator approves at every autonomy level.
+5. Without a plan, the operator picks targets by hand in the Plan view. Nocturne never
+   waits for or calls Astroalex at run time.
+
+**Implemented in M4**, with the Plan view. `plan.site_check_tolerance_km` joins the
+configuration then, with its value decided in the same ADR as the model.
 
 ---
 
@@ -1346,7 +1428,10 @@ Full PWA, all four views, i18n, night mode, Samba share.
   through each entry point, agent tool surface included; screw mapping stored in SQLite
   and invalidated by an optical-train change; a star past `max_offaxis_arcmin` returns
   `star_off_axis` rather than a number, and re-centring ends the check instead of slewing.
-  Prerequisite: `SetProperty` gated (issue #1).
+  Prerequisite: `SetProperty` gated (issue #1). **Imaging plan import (§11.6):** every
+  refusal reason produced by a fixture built to trigger it, with a positive control per
+  rule; a plan that would lower an altitude floor or name an inactive train is refused,
+  never clamped; an approved plan's slews are still rejected by the governor when unsafe.
 - **HITL**: usable one-handed on the phone, on the terrace, at night, in Spanish. On the
   200PDS, with the secondary already squared with a Cheshire: a deliberately introduced
   small **primary** miscollimation is detected, the labelled arrow names the bolt that
