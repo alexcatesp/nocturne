@@ -74,7 +74,7 @@ makes every *control* decision (guiding, focusing, slewing, safety limits).
 | Item | Model | Key parameters |
 |---|---|---|
 | OTA | Sky-Watcher 200PDS | 200 mm aperture, f/5, 1000 mm nominal FL, Newtonian |
-| Coma corrector | Baader MPCC Mark III | **Not yet owned.** ~1.0×, requires 55 mm backfocus |
+| Coma corrector | Baader MPCC Mark III | **Fitted 2026-11-10; focus not yet verified** — `docs/mpcc-focus-test.md`. ~1.0×, requires 55 mm backfocus |
 | Main camera | ZWO ASI533MM Pro | IMX533 mono, 3008×3008, 3.76 µm, 14-bit, TEC cooled |
 | Filter wheel | ZWO EFW 8×1.25" | Populated: Dark, L, R, G, B. Positions 6–8 empty |
 | Focuser | ZWO EAF | Absolute positioning, temperature sensor |
@@ -1388,7 +1388,9 @@ Tool surface, event bus, budget guard, decision log.
 - OAG migration: config change only, but guide-star availability with the ASI120MM Mini's
   4.8 × 3.6 mm sensor at f/5 will require careful prism placement. Not a software problem.
 - MPCC Mark III: adding the `mpcc` optical train requires re-deriving focal length from
-  plate solves and invalidating the flat library.
+  plate solves and invalidating the flat library. The corrector is fitted; whether the
+  train reaches focus with the current focuser is checked by the daylight procedure in
+  `docs/mpcc-focus-test.md`, which also yields a caliper value for `step_size_um`.
 - **Merge Addendum A into this document before M3** — as §16–§18 with a revised §14, per
   ADR 0016. Sensor characterisation ceases to be an open item at that point; §A.1 takes it
   over as a hard M3 prerequisite.
